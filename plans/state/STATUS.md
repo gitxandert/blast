@@ -12,7 +12,7 @@ Phases: 0 not started · 1 planning · 2 wave 1 · 3 wave 2 · 4 wave 3 · 5 wav
 | Task | Brief | Wave | Plan | Implementation | Notes |
 |---|---|---|---|---|---|
 | F1 | PB | 1 | approved (F1a,b) | merged (integrate/wave-1 @ 1d39902) | |
-| C1 | PA | 1 | approved (fixes applied) | in progress (PM), task/C1 | |
+| C1 | PA | 1 | approved (fixes applied) | in-review (architect), task/C1 @ 936bc55 | |
 | E1 | PA | 2 | none | none | expected to split into E1a/b/c |
 | LOAD | PB | 2 | draft | none | |
 | SH | PF | 2 | reviewed (SHa,b + SH-grammar; arch: approve w/ fixes) | none | grammar needs user approval |
