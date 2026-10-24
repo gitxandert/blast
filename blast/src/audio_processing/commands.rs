@@ -839,9 +839,21 @@ impl CmdProcessor {
         let mut jit: Vec<f32> = Vec::new();
         // implement user-defined seed l8r
         let mut rng = X128P::new(fast_seed());
+        // key in the Voice's processes; defaults to the first free
+        // of seq, seq1, seq2...
+        let mut p_name: Option<String> = None;
 
         while let Some(arg) = args.next() {
             match arg {
+                "-n" | "--name" => {
+                    let n_arg = args
+                        .next()
+                        .ok_or(CmdErr::MissingArg {
+                            arg: "name".to_string(),
+                            cmd: "seq -n".to_string(),
+                        })?;
+                    p_name = Some(n_arg.to_string());
+                }
                 "-t" | "--tempo" => {
                     let t_arg = args
                         .next()
@@ -1286,12 +1298,36 @@ impl CmdProcessor {
 
         // TODO: allow for Idx::Group
         let voice = self.find_voice(name.clone())?;
+
+        // each Process needs its own key so that processes.len()
+        // (and so ProcRepr.idx) matches the engine's Vec<Process>
+        let p_name = match p_name {
+            Some(n) => {
+                if voice.processes.contains_key(&n) {
+                    return Err(CmdErr::AlreadyIs {
+                        ty: "Process".to_string(),
+                        name: n,
+                    });
+                }
+                n
+            }
+            None => {
+                let mut n = "seq".to_string();
+                let mut i = 1;
+                while voice.processes.contains_key(&n) {
+                    n = format!("seq{}", i);
+                    i += 1;
+                }
+                n
+            }
+        };
+
         let repr = ProcRepr::new(
             voice.processes.len(), 
             Idx::Voice(voice.idx), 
             Some(TempoRepr::clone(&tempo))
         );
-        voice.processes.insert("seq".to_string(), repr);
+        voice.processes.insert(p_name, repr);
         // push tempo to proc_tempi only if owned by the Process
         if tempo.mode == TempoMode::Process {
             voice.proc_tempi.insert(
@@ -1707,5 +1743,48 @@ mod tests {
         assert!(matches!(seq_err("seq kick -s 0,1 -j x"), CmdErr::InvalidArg { .. }));
         assert!(matches!(seq_err("seq kick -s 0,1 -j 1|2|3"), CmdErr::Formatting { .. }));
         assert!(matches!(seq_err("seq kick -s 0,1 -j 1-2-3"), CmdErr::Formatting { .. }));
+    }
+    fn proc_idx(cp: &mut CmdProcessor, p_name: &str) -> usize {
+        let voice = cp.find_voice("kick".to_string()).unwrap();
+        voice.processes.get(p_name).unwrap().idx
+    }
+
+    #[test]
+    fn seq_default_names_are_unique() {
+        let mut cp = processor();
+        for _ in 0..3 {
+            assert!(seq(&mut cp, "seq kick -s 0").is_ok());
+        }
+        assert_eq!(cp.find_voice("kick".to_string()).unwrap().processes.len(), 3);
+        assert_eq!(proc_idx(&mut cp, "seq"), 0);
+        assert_eq!(proc_idx(&mut cp, "seq1"), 1);
+        assert_eq!(proc_idx(&mut cp, "seq2"), 2);
+        // each owns a Process tempo
+        assert_eq!(cp.find_voice("kick".to_string()).unwrap().proc_tempi.len(), 3);
+    }
+
+    #[test]
+    fn seq_named() {
+        let mut cp = processor();
+        assert!(seq(&mut cp, "seq kick -n hats -s 0").is_ok());
+        assert!(seq(&mut cp, "seq kick --name seq -s 0").is_ok());
+        // default skips names already taken
+        assert!(seq(&mut cp, "seq kick -s 0").is_ok());
+        assert_eq!(proc_idx(&mut cp, "hats"), 0);
+        assert_eq!(proc_idx(&mut cp, "seq"), 1);
+        assert_eq!(proc_idx(&mut cp, "seq1"), 2);
+
+        match seq(&mut cp, "seq kick -n hats -s 0") {
+            Err(CmdErr::AlreadyIs { ty, name }) => {
+                assert_eq!(ty, "Process");
+                assert_eq!(name, "hats");
+            }
+            _ => panic!("duplicate seq name should fail"),
+        }
+        // the failed seq didn't touch the mirror
+        assert_eq!(cp.find_voice("kick".to_string()).unwrap().processes.len(), 3);
+        assert_eq!(cp.find_voice("kick".to_string()).unwrap().proc_tempi.len(), 3);
+
+        assert!(matches!(seq_err("seq kick -s 0 -n"), CmdErr::MissingArg { .. }));
     }
 }
