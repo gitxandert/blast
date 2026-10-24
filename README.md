@@ -22,6 +22,15 @@ One of the goals of this project is to realize as many features as possible with
 - processes Commands separately from audio thread for string parsing, hashmap operations, and robust error-handling
 - uses terminal in raw mode for custom terminal rendering
 - implements fast RNG with xoroshiro128+ generation, Lemire's fast modulo, and architecture-specific seeding
+- commands/
+  - mod: `Command`, `Parsed`, `CmdProcessor::parse`/`submit`
+  - errors: `CmdErr`
+  - queue: `CmdQueue` (the command queue to the audio thread)
+  - reprs: `Idx`, `EngineState` (the REPL-side mirror of the engine) and its lookups
+  - tempo: `TempoRepr`, the shared `-t` tempo-spec parser, `tc`
+  - voice, group, track, process: each family's parsers and `HELP` table
+  - procs/seq: the `seq` process parser
+  - testing: shared test helpers
 
 **src/file_parsing**:
 - mod
