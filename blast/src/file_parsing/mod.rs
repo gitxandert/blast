@@ -55,6 +55,12 @@ pub fn load_assets(dir: &str) -> DecodeResult<(HashMap<String, AudioFile>, u32, 
             }
         };
 
+        // a Voice needs at least one whole frame to play
+        if track.num_channels == 0 || track.samples.len() < track.num_channels as usize {
+            println!("Error: '{}' has no audio, skipping", path);
+            continue;
+        }
+
         if tracks.contains_key(&track.file_name) {
             println!("Error: multiple files with the same name {}, skipping '{}'", track.file_name, path);
             continue;
@@ -231,5 +237,15 @@ mod tests {
         assert_eq!(sorted_names(&tracks), vec!["kick", "rim1", "shaker", "snare"]);
         assert_eq!(rate, 48000);
         assert_eq!(channels, 2);
+    }
+
+    #[test]
+    fn empty_tracks_are_skipped() {
+        let dir = temp_assets("no_audio", &[
+            ("a.wav", wav_bytes(48000, 2, &[1, 2])),
+            ("e.wav", wav_bytes(48000, 2, &[])),
+        ]);
+        let (tracks, _, _) = load(&dir).unwrap();
+        assert_eq!(sorted_names(&tracks), vec!["a"]);
     }
 }

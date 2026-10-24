@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{self, Read, SeekFrom};
 use std::ops::{Shl, BitOr, AddAssign};
-use super::decode_helpers::{AudioFile, DecodeResult, DecodeError, pcm_to_i16};
+use super::decode_helpers::{AudioFile, DecodeResult, DecodeError, pcm_to_i16, file_stem};
 
 fn read_id(vec: &mut Vec<u8>, start: &mut usize, end: &mut usize) -> DecodeResult<[u8; 4]> {
     *end += 4;
@@ -199,15 +199,7 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     // 8-bit AIFF is signed
     let samples: Vec<i16> = pcm_to_i16(data, sample_size, true, false)?;
 
-    let file_name: &str = match path.rsplit_once(|b: char| b == '.') {
-        Some((before, after)) if !before.is_empty() && !after.is_empty() => {
-            match before.rsplit_once(|b: char| b == '/') {
-                Some((assets, name)) => name,
-                None => return Err(DecodeError::InvalidData("File is not nested".to_string())),
-            }
-        }
-        _ => return Err(DecodeError::InvalidData("File has no name".to_string())),
-    };
+    let file_name = file_stem(path)?;
 
     Ok(AudioFile::new(file_name, "aiff", sample_rate as u32, num_channels, sample_size, samples))
 }

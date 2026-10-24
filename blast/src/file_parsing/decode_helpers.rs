@@ -37,6 +37,14 @@ impl AudioFile {
     }
 }
 
+// a track's name is its file name without directory or extension
+pub fn file_stem(path: &str) -> DecodeResult<&str> {
+    match std::path::Path::new(path).file_stem().and_then(|s| s.to_str()) {
+        Some(name) if !name.is_empty() => Ok(name),
+        _ => Err(DecodeError::InvalidData(format!("File has no name: '{path}'"))),
+    }
+}
+
 // convert integer PCM of any width up to 32 bits to i16;
 // samples narrower than their container are left-justified,
 // so only the container width (bits rounded up to bytes) matters

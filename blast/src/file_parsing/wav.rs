@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{self, Read, SeekFrom};
 use std::ops::{Shl, BitOr, AddAssign};
-use super::decode_helpers::{AudioFile, DecodeError, DecodeResult, pcm_to_i16, float_to_i16};
+use super::decode_helpers::{AudioFile, DecodeError, DecodeResult, pcm_to_i16, float_to_i16, file_stem};
 
 // format codes
 #[repr(u16)]
@@ -98,6 +98,14 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
         let id = read_id(&mut reader, &mut start, &mut end)?;
         let size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
 
+        // a data chunk that runs past the end of the file is common
+        // in streamed/unfinalised WAVs (e.g. size 0xFFFFFFFF), so
+        // read what's there; a short fmt chunk is still an error
+        let size = match &id {
+            b"data" => size.min((reader.len() - start) as u32),
+            _ => size,
+        };
+
         match &id {
             b"fmt " => fmt_chunk = Some((start, size)),
             b"data" => data_chunk = Some((start, size)),
@@ -105,7 +113,7 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
             _ => {}
         }
 
-        if (&id == b"fmt " || &id == b"data") && start + size as usize > reader.len() {
+        if &id == b"fmt " && start + size as usize > reader.len() {
             return Err(DecodeError::UnexpectedEof);
         }
 
@@ -184,6 +192,10 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
         Some(val) => val,
         None => return Err(DecodeError::UnexpectedEof),
     };
+    // drop a partial last frame (from a clamped data chunk) so
+    // the channels stay aligned
+    let frame_bytes = (num_channels * ((bits_per_sample + 7) / 8)).max(1) as usize;
+    let data = &data[..data.len() - data.len() % frame_bytes];
 
     // container size (bits_per_sample) decides how many bytes each sample takes
     let samples: Vec<i16> = match sample_fmt {
@@ -193,15 +205,7 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
         other => return Err(DecodeError::UnsupportedFormat(format!("{:?}", other))),
     };
 
-    let file_name: &str = match path.rsplit_once(|b: char| b == '.') {
-        Some((before, after)) if !before.is_empty() && !after.is_empty() => {
-            match before.rsplit_once(|b: char| b == '/') {
-                Some((assets, name)) => name,
-                None => return Err(DecodeError::InvalidData("File is not nested".to_string())),
-            }
-        }
-        _ => return Err(DecodeError::InvalidData("File has no name".to_string())),
-    };
+    let file_name = file_stem(path)?;
 
     Ok(AudioFile::new(file_name, "wav", sample_rate, num_channels, file_bits, samples))
 }
@@ -303,8 +307,9 @@ mod tests {
     #[test]
     fn truncated_file_is_eof() {
         let bytes = riff(&[chunk(b"fmt ", &fmt_body(1, 2, 48000, 16)), chunk(b"data", &i16_data(&SAMPLES))]);
+        // a cut-off data chunk reads the whole frames that are there
         let cut = &bytes[..bytes.len() - 3];
-        assert!(matches!(parse_temp("trunc", cut), Err(DecodeError::UnexpectedEof)));
+        assert_eq!(parse_temp("trunc", cut).unwrap().samples, SAMPLES[..4]);
         assert!(matches!(parse_temp("trunc_hdr", &bytes[..20]), Err(DecodeError::UnexpectedEof)));
     }
 
@@ -351,7 +356,7 @@ mod tests {
         assert_eq!(file.bits_per_sample, 20);
 
         let data: Vec<u8> = [1.0f32, -1.0, 0.0].iter().flat_map(|s| s.to_le_bytes()).collect();
-        let file = depth_file("extf32", fmt_ext_body(3, 2, 48000, 32, 32), &data);
+        let file = depth_file("extf32", fmt_ext_body(3, 1, 48000, 32, 32), &data);
         assert_eq!(file.samples, EXPECTED.to_vec());
     }
 
@@ -444,5 +449,22 @@ mod tests {
             assert_eq!(file.bits_per_sample, 16);
             assert_eq!(file.samples.len(), 72000);
         }
+    }
+
+    #[test]
+    fn streamed_data_size_reads_to_end() {
+        let mut bytes = riff(&[chunk(b"fmt ", &fmt_body(1, 2, 48000, 16)), chunk(b"data", &i16_data(&SAMPLES))]);
+        // the data size field sits just before the samples
+        let at = bytes.len() - SAMPLES.len() * 2 - 4;
+        bytes[at..at + 4].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        assert_eq!(parse_temp("streamed", &bytes).unwrap().samples, SAMPLES.to_vec());
+    }
+
+    #[test]
+    fn name_needs_no_directory() {
+        assert_eq!(file_stem("kick.wav").unwrap(), "kick");
+        assert_eq!(file_stem("a/b/snare.aif").unwrap(), "snare");
+        assert_eq!(file_stem("noext").unwrap(), "noext");
+        assert!(file_stem("").is_err());
     }
 }
