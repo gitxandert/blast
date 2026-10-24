@@ -1,6 +1,6 @@
 # F1a report
 Status: ready (for architect review; implemented by the PM under the reduced org, ORG.md top note)
-Branch: task/F1a @ 510d020 (one commit on integrate/wave-1 @ a224767)
+Branch: task/F1a @ ffa3a2c (two commits on integrate/wave-1 @ a224767)
 Worktree: /home/alexander-toth/rust_proj/blast-F1a (contains an untracked `blast/assets` symlink to the main checkout's assets, for the real-asset tests; not committed)
 
 ## What was built
@@ -60,11 +60,23 @@ Worktree: /home/alexander-toth/rust_proj/blast-F1a (contains an untracked `blast
 - Newly loadable in `load_assets`: `.wave`, `.aifc`, `.flac`, `.mp1/2/3`,
   `.m4a/.mp4`, `.aac/.adts`.
 
+## Fix after architect review (ffa3a2c)
+`corrupt_flac_frame_is_filled` failed once the F1b fixtures existed: symphonia's
+FLAC reader drops a CRC-failing frame before the decoder, so no silence was
+filled. Per the architect's plan fix (F1a step 2), timestamp gaps between
+packets are now filled: expected next pts = `pts + dur + trim_start + trim_end`,
+gap converted through `time_base` (checked), capped at 1 s, counted as one
+failed packet (and one packet) for the 10% rule. New unit test
+`gap_frames_is_bounded`. With fixtures present: 191 tests pass on task/F1a;
+F1b's `mp3_is_gapless` (exactly 66,150 frames) and `aac_length_and_level` still
+pass, so the span calculation makes no false fills.
+
 ## Checklist results
 - `cargo build`: 0 warnings.
 - `cargo test`: `test result: ok. 190 passed; 0 failed` (179 before; with
   `blast/assets` linked so `loads_real_assets`/`decodes_real_assets` ran).
-  `corrupt_flac_frame_is_filled` skips until F1b adds `assets/.fixtures/a.flac`.
+  After the fix: 191 passed, with the F1b fixtures present (so
+  `corrupt_flac_frame_is_filled` runs).
 - `cargo fmt --check`: clean.
 - `cargo clippy --all-targets`: no lint in `file_parsing/**`. Clippy still fails
   on the pre-existing deny-level `not_unsafe_ptr_arg_deref` in

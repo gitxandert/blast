@@ -294,6 +294,36 @@ Results: `cargo build` 0 warnings, `cargo test` 179 passed, `cargo fmt
 --check` clean.
 
 ## Integration log
+
+### Wave 1: branch reviews (reduced org: I review the PM's branches with the planner checklist)
+**task/F1a @ 510d020 (2026-10-24): needs-fix, not merged.**
+I ran it in `/home/alexander-toth/rust_proj/blast-F1a`:
+- `cargo build`: 0 warnings.
+- `cargo fmt --check`: clean.
+- clippy: no lints in `file_parsing/**`. The only error is the pre-existing
+  deny-level `not_unsafe_ptr_arg_deref` at `engine.rs:40`. That's for E1/R1,
+  and I note it for the wave-1 gate summary.
+- **`cargo test`: 189 pass, 1 fails.** `corrupt_flac_frame_is_filled` now
+  runs, because F1b's fixtures exist in `assets/.fixtures/`: 123,084 vs
+  132,300 samples. symphonia's FLAC parser CRC-checks frames and drops the
+  bad 4,608-frame block before the decoder sees it, so `fill_frames` never
+  runs. (Its `pts` comes from the frame header: `parser.rs:571`.)
+Fix (also added to F1a step 2 as an editorial plan fix, changelog entry):
+fill demuxer gaps. Track the expected next `pts` = previous
+`pts + dur + trim_start + trim_end`. When a packet's `pts` is ahead of it,
+fill the gap with silence (converted through `time_base`, checked, capped
+at 1 s per gap and at 2^28 overall), and count it as one failed packet. Add a
+pure helper with unit tests. Re-run the F1b fixture tests too (MP3 exact
+length, AAC bounds), since a wrong span would add false fills.
+The rest of the checklist passes:
+- Owned files only (plus the repo README module list).
+- Deviations 1–5 accepted. The AIFF test-data changes are justified, since
+  the old COMT body was malformed.
+- No `unsafe`, and no unwrap/indexing on file data (`riff_fixup` uses `get`
+  throughout, and `walk` always advances).
+- Not reachable from `render`/`apply`.
+- One commit, `file_parsing: …`, with the trailer.
+- REQ-031 condition 4 list is present.
 (one section per wave: merge order, results, issues)
 
 ## Clarifications to README (no change in meaning)

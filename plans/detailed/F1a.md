@@ -167,6 +167,19 @@ there is no `enable_gapless` on `FormatOptions` any more),
      Put the sizing in a small pure function,
      `fn fill_frames(last_frames: Option<usize>, dur: u64, time_base: Option<TimeBase>, rate: u32, max_per_packet: Option<u64>) -> usize`,
      so it's unit-tested without a corrupt file.
+   - Packets the demuxer drops (REQ-034, added at review): some readers
+     (FLAC: a frame that fails its CRC) skip a corrupt frame themselves, so
+     the decoder never sees it and the output comes out short. Track the
+     expected next timestamp, `pts + dur + trim_start + trim_end` of the
+     previous packet of this track (the untrimmed span, because symphonia
+     advances `pts` by the untrimmed duration). If a later packet's `pts` is
+     greater than that, fill the gap with silence: convert it to frames
+     through `time_base` (checked, as for `dur`), cap it at one second of
+     frames per gap and at the 2^28 cap overall, and count it as one failed
+     packet. No fill before the first packet, and none when `pts` is not
+     ahead (MP3/ADTS readers resync without a gap, which is fine). Put the
+     gap-to-frames conversion in a pure helper and unit-test it next to
+     `fill_frames`.
      After the loop, fail with `InvalidData` if more than 10% of packets
      failed. Any other `Err` → return it.
    - After the loop: truncate the output to
@@ -348,3 +361,4 @@ porting.
 - 2026-10-24: first draft.
 - 2026-10-24: step 1 line refs for `integrate/wave-1`; scaffold step 0's `i16_to_f32`/`f32_to_i16` handled (editorial).
 - 2026-10-24: approved (REQ-043), conditional on the architect's fixes, now applied: REQ-034 silence sizing (step 2, new tests `fill_frames_is_bounded`, `corrupt_flac_frame_is_filled`); REQ-031 conditions (step 5, `min`-only limit, tests `wav_trailing_bytes_after_riff` and `riff_fixup_limit_only_shortens`, report list); `Path::new` in `decode_bytes`; line refs and header moved to 2f97859. Request-dependent branches resolved per the decisions on REQ-031..036. Status → approved.
+- 2026-10-24 (architect, branch review): step 2 gains the demuxer-gap fill. `corrupt_flac_frame_is_filled` failed once F1b's fixtures existed (123,084 vs 132,300 samples: symphonia's FLAC reader drops the CRC-failing 4,608-frame block before the decoder sees it). This is within REQ-034's approved intent (keep timing).
