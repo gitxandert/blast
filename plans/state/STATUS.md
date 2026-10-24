@@ -48,7 +48,7 @@ Implementation states: none → scaffolded → dispatched → in-review (planner
 
 ## User queue (presented one at a time, top first)
 
-**Now:** wave 2 planning: architect writes E1; then reviews LOAD; user approves E1, LOAD, SH plans and their requests.
+**Paused by user (2026-10-24) after wave 1 merged into dev.** On resume: wave 2 planning: architect writes E1; then reviews LOAD; user approves E1, LOAD, SH plans and their requests.
 
 Wave 1 items REQ-024, 031, 032, 033, 034, 036, 042, 043, 044: all decided 2026-10-24 (approved as recommended; see decisions.md).
 
@@ -60,7 +60,7 @@ FYI for user: architect bumped alsa-sys 0.3.1→0.4.0 to resolve with cpal (READ
 
 | Agent | Role | Scope | Spawned | State |
 |---|---|---|---|---|
-| architect | Architect | phase 1 reviews: C1, F1a/b, REC, SH + REQ-001..006, 024, 031..036 | 2026-10-24 (resume) | idle; next: merge C1/F1a/F1b when reports say ready |
+| architect | Architect | phase 1 reviews: C1, F1a/b, REC, SH + REQ-001..006, 024, 031..036 | 2026-10-24 (resume) | idle (wave 1 merged into dev); respawn from journal on resume |
 | planner-PA | Planner | PA-core: E1 plans, R1 plan, REQ-025..030 | 2026-10-24 (resume) | stopped (user: save usage); respawn later, one at a time |
 | planner-PB | Planner | PB-audio-files: REQ-031..036 first, then LOAD, TRK, REQ-037..041 | 2026-10-24 (resume) | done (F1a/b fixes applied, Status approved; F1a implementer prompt in its journal, NOT dispatched). Retired: user wants architect + PM only |
 | planner-PF | Planner | PF-shell-repl | n/a | not respawned (planning done; waits for decisions) |
