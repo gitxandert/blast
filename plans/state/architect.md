@@ -393,6 +393,16 @@ warnings plus the pre-existing deny error at `engine.rs:40`, and none in
 decision on merging `integrate/wave-1` into `dev`.
 Carry-over for LOAD (owns `file_parsing/mod.rs` in wave 2): make
 `probe_file` sniff AU before raw, as `decode_bytes` does (F1b nit).
+
+### Wave 1 → dev (2026-10-24, user-approved REQ-045)
+`bde1a64 merge: wave 1 (decode adapter, commands split) into dev`
+(`--no-ff`, from `integrate/wave-1` @ a652f36), made in the main checkout.
+`plans/` was unchanged by the merge. On dev: `cargo build` 0 warnings,
+`cargo test` 225 passed and 1 ignored (with the real assets and fixtures),
+fmt clean, working tree clean. Not pushed; no branches deleted.
+**Wave 1 done.** Next: wave 2 (E1, LOAD, SH), once its plans are written
+(E1 and LOAD/TRK are mine under the reduced org) and user-approved. Then
+create `integrate/wave-2` from dev.
 (one section per wave: merge order, results, issues)
 
 ## Clarifications to README (no change in meaning)
