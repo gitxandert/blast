@@ -619,6 +619,15 @@ impl CmdProcessor {
                 cmd: "group".to_string() 
             })?;
 
+        // a second Group by the same name would replace the first
+        // in the mirror but not in the engine, shifting every later idx
+        if self.engine_state.groups.contains_key(name) {
+            return Err(CmdErr::AlreadyIs { 
+                ty: "Group".to_string(), 
+                name: name.to_string() 
+            });
+        }
+
         // -t tempo -v voices
 
         let mut tempo = TempoRepr::new(0);
@@ -820,6 +829,14 @@ impl CmdProcessor {
                 arg: "name".to_string(), 
                 cmd: "tempocon".to_string() 
             })?;        
+
+        // see try_group
+        if self.engine_state.tempo_cons.contains_key(name) {
+            return Err(CmdErr::AlreadyIs { 
+                ty: "TempoContext".to_string(), 
+                name: name.to_string() 
+            });
+        }
 
         let tempo = args
             .next()
@@ -1909,5 +1926,65 @@ mod tests {
         let error = cp.submit("load nope".to_string(), &queue).unwrap_err();
         assert!(error.contains("nope"));
         assert!(queue.try_pop().is_none());
+    }
+
+    // duplicate names (B17)
+
+    fn tc_tempo(cmd: Command) -> TempoRepr {
+        match cmd {
+            Command::Tc(args) => args.tempo,
+            _ => panic!("not a Tc"),
+        }
+    }
+
+    #[test]
+    fn tc_parses_tempo() {
+        let mut cp = processor(&[]);
+        let t = tc_tempo(ok(&mut cp, "tc a b:120"));
+        assert!(t.owned);
+        assert_eq!(t.mode, TempoMode::Context);
+        assert_eq!(t.unit, TempoUnit::Bpm);
+        assert_eq!(t.interval, 120.0);
+        assert_eq!(t.idx, 0);
+        let t = tc_tempo(ok(&mut cp, "tempocon b m:500"));
+        assert_eq!(t.unit, TempoUnit::Millis);
+        assert_eq!(t.idx, 1);
+
+        assert!(matches!(err(&mut cp, "tc"), CmdErr::MissingArg { .. }));
+        assert!(matches!(err(&mut cp, "tc c"), CmdErr::MissingArg { .. }));
+        assert!(matches!(err(&mut cp, "tc c b"), CmdErr::TempoFormatting { .. }));
+        assert!(matches!(err(&mut cp, "tc c x:1"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(err(&mut cp, "tc c b:fast"), CmdErr::InvalidArg { .. }));
+        assert_eq!(cp.engine_state.tempo_cons.len(), 2);
+    }
+
+    #[test]
+    fn duplicate_tc_is_rejected() {
+        let mut cp = processor(&[]);
+        ok(&mut cp, "tc a b:120");
+        assert!(matches!(err(&mut cp, "tc a b:90"), CmdErr::AlreadyIs { .. }));
+        let a = cp.engine_state.tempo_cons.get("a").unwrap();
+        assert_eq!(a.interval, 120.0);
+        assert_eq!(cp.engine_state.tempo_cons.len(), 1);
+
+        // later contexts get their engine Vec position
+        let t = tc_tempo(ok(&mut cp, "tc b b:60"));
+        assert_eq!(t.idx, 1);
+        assert_eq!(cp.engine_state.tempo_cons.get("b").unwrap().idx, 1);
+    }
+
+    #[test]
+    fn duplicate_group_is_rejected() {
+        let mut cp = loaded(&["a", "b", "c"]);
+        ok(&mut cp, "group g -v a");
+        assert!(matches!(err(&mut cp, "group g -v b"), CmdErr::AlreadyIs { .. }));
+        // b wasn't consumed
+        assert_eq!(v_idx(&cp, "b"), 0);
+        assert_eq!(v_idx(&cp, "c"), 1);
+        assert_eq!(cp.engine_state.groups.len(), 1);
+        assert!(cp.engine_state.groups.get("g").unwrap().voices.contains_key("a"));
+
+        ok(&mut cp, "group h -v b");
+        assert_eq!(cp.engine_state.groups.get("h").unwrap().idx, 1);
     }
 }

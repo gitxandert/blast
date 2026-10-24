@@ -879,4 +879,25 @@ mod tests {
         assert_eq!(id(&c.groups[0].voices[0]), 1);
         assert_eq!(id(&c.voices[0]), 2);
     }
+
+    // duplicate names (B17)
+
+    #[test]
+    fn later_names_match_engine_positions_after_duplicates() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("a", 1, 16), track("b", 2, 16)]);
+        run(&mut cp, &mut c, "tc x b:120");
+        assert!(cp.parse("tc x b:90".to_string()).is_err());
+        run(&mut cp, &mut c, "tc y b:60");
+        run(&mut cp, &mut c, "load a");
+        run(&mut cp, &mut c, "load b");
+        run(&mut cp, &mut c, "group g -v a");
+        assert!(cp.parse("group g -v b".to_string()).is_err());
+        run(&mut cp, &mut c, "group h -t c:y -v b");
+
+        assert_eq!(c.tempo_cons.len(), 2);
+        assert_eq!(c.groups.len(), 2);
+        assert!(Rc::ptr_eq(&c.groups[1].state.tempo, &c.tempo_cons[1]));
+        assert_eq!(id(&c.groups[1].voices[0]), 2);
+    }
 }
