@@ -85,6 +85,15 @@ impl Conductor {
                     }
                 }
 
+                // advance once per frame, after every channel is mixed
+                for voice in &mut self.voices {
+                    voice.advance();
+                }
+
+                for group in &mut self.groups {
+                    group.advance();
+                }
+
                 clock::advance(1);
             }
         }
@@ -481,11 +490,19 @@ impl Voice {
         unsafe {
             *acc += (sample * state.gain) as i16;
         }
+    }
 
-        // advance
-        if ch == self.channels - 1 {
-            state.position += state.velocity;
+    // move position; called once per frame, after process()
+    fn advance(&mut self) {
+        if !self.state.active { return; }
+
+        let state = &mut self.state;
+
+        if state.position as usize >= state.end {
+            return;
         }
+
+        state.position += state.velocity;
     }
 }
 
@@ -588,6 +605,15 @@ impl Group {
 
         for v in &mut self.voices {
             v.process(acc, frame, ch);
+        }
+    }
+
+    // advance Voices; called once per frame
+    fn advance(&mut self) {
+        if !self.state.active { return; }
+
+        for v in &mut self.voices {
+            v.advance();
         }
     }
 }
@@ -695,6 +721,35 @@ mod tests {
         start_voice(&mut c, 0);
         assert_eq!(c.voices[0].state.position, 0.0);
         assert_eq!(c.voices[0].state.tempo.borrow().current, 0);
+    }
+
+    #[test]
+    fn mono_voice_on_stereo_advances_once_per_frame() {
+        let af = AudioFile::new("m", "wav", 48000, 1, 16, (0..100).collect());
+        let mut c = one_voice(2, af, tempo(TempoMode::Voice, 100.0));
+        start_voice(&mut c, 0);
+
+        let out = render(&mut c, 2, 10);
+
+        // each mono sample is duplicated across ch0/ch1
+        let expected: Vec<i16> = (0..10).flat_map(|s| [s, s]).collect();
+        assert_eq!(out, expected);
+        assert_eq!(c.voices[0].state.position, 10.0);
+    }
+
+    #[test]
+    fn stereo_voice_on_stereo_keeps_channels() {
+        // L = frame index, R = -frame index
+        let samples: Vec<i16> = (0..100).flat_map(|s| [s, -s]).collect();
+        let af = AudioFile::new("s", "wav", 48000, 2, 16, samples);
+        let mut c = one_voice(2, af, tempo(TempoMode::Voice, 100.0));
+        start_voice(&mut c, 0);
+
+        let out = render(&mut c, 2, 10);
+
+        let expected: Vec<i16> = (0..10).flat_map(|s| [s, -s]).collect();
+        assert_eq!(out, expected);
+        assert_eq!(c.voices[0].state.position, 10.0);
     }
 
     #[test]
