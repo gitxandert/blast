@@ -4,7 +4,7 @@ type: plan-approval
 from: PM (for planner PA-core)
 tasks: [C1]
 blocks: [C1]
-status: awaiting-user
+status: approved
 created: 2026-10-24
 ---
 
@@ -25,3 +25,5 @@ Wave 1 can't start until both C1 and F1 (F1a, F1b) are approved.
 Approve with fixes (state/architect.md, "Plan reviews").
 
 ## Decision
+
+User, 2026-10-24 (via phone): **approved**, approve C1 plan, conditional on the architect's 4 editorial fixes (state/architect.md, Plan reviews: C1) applied by the planner before dispatch.

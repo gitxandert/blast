@@ -4,7 +4,7 @@ type: question
 from: planner (PA-core, C1)
 tasks: [C1]
 blocks: [C1]
-status: awaiting-user
+status: approved
 created: 2026-10-24
 ---
 
@@ -71,3 +71,5 @@ Current lines on `integrate/wave-1` @ `2f97859`: `runtime.rs:127`,
 C1.md cites the engine lines from before step 0, which are 12 lower.
 
 ## Decision
+
+User, 2026-10-24 (via phone): **approved**, option 1: C1 makes the 7 call-site edits itself in one separate commit; architect checks the out-of-ownership diff at merge.

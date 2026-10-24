@@ -4,7 +4,7 @@ type: dependency
 from: planner (PB-audio-files / F1a)
 tasks: [F1a]
 blocks: []
-status: awaiting-user
+status: approved
 created: 2026-10-24
 ---
 
@@ -52,3 +52,5 @@ before F1a is dispatched. I also update the symphonia row in README §1.1.
 F1 writes no code for it.
 
 ## Decision
+
+User, 2026-10-24 (via phone): **approved**, option 1: add symphonia `id3v2` feature (architect edits Cargo.toml on integrate/wave-1 and README §1.1).

@@ -4,7 +4,7 @@ type: question
 from: planner (PB-audio-files / F1a, F1b)
 tasks: [F1a, F1b]
 blocks: []
-status: awaiting-user
+status: approved
 created: 2026-10-24
 ---
 
@@ -58,3 +58,5 @@ FLAC/WAV for sample-accurate loops." F1b's `aac_length_and_level` test pins
 the measured bounds.
 
 ## Decision
+
+User, 2026-10-24 (via phone): **approved**, option 1: end-trim only for AAC; architect amends README §3.2 wording as in its review.

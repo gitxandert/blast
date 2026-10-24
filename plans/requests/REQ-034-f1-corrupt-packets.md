@@ -4,7 +4,7 @@ type: question
 from: planner (PB-audio-files / F1a)
 tasks: [F1a]
 blocks: []
-status: awaiting-user
+status: approved
 created: 2026-10-24
 ---
 
@@ -57,3 +57,5 @@ This is user-visible behaviour (a damaged file loads with a short silent gap),
 so the user decides.
 
 ## Decision
+
+User, 2026-10-24 (via phone): **approved**, option 1: substitute silence, fail file above 10% bad packets, with the architect's silence-sizing fix (capped).

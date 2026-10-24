@@ -4,7 +4,7 @@ type: question
 from: planner (PB-audio-files / F1a)
 tasks: [F1a, F1b]
 blocks: []
-status: awaiting-user
+status: approved
 created: 2026-10-24
 ---
 
@@ -79,3 +79,5 @@ Conditions, which the F1a plan should state:
 The behaviour choice is the user's.
 
 ## Decision
+
+User, 2026-10-24 (via phone): **approved**, option 1: add riff_fixup.rs pre-pass, with the architect's 4 conditions.

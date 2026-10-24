@@ -4,7 +4,7 @@ type: plan-change
 from: planner (PB-audio-files / F1a)
 tasks: [F1a, F1b, LOAD, TRK]
 blocks: []
-status: awaiting-user
+status: approved
 created: 2026-10-24
 ---
 
@@ -54,3 +54,5 @@ LOAD (`scan_assets`) and TRK (`rescan`) must use `is_supported_extension`,
 not their own lists. I'll check that when their plans arrive.
 
 ## Decision
+
+User, 2026-10-24 (via phone): **approved**, option 1: extension whitelist via `is_supported_extension`; architect amends README §3.2 wording.

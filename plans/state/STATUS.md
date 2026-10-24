@@ -1,6 +1,6 @@
 # Project status (PM-owned)
 
-**Phase:** 1 (planning)
+**Phase:** 2 (wave 1). Phase 1 ended 2026-10-24: all wave-1 plans (C1, F1a, F1b) user-approved with the architect's fixes. Later plans continue review/approval in parallel.
 **Updated:** 2026-10-24
 
 **Resumed 2026-10-24 (new PM session).** Corrections vs. the previous board: request numbering is consistent (PA uses REQ-024..030, PB REQ-031..041; plan cross-refs checked). Reserved placeholder request files still to be written: REQ-015..017 (PH), 018..023 (PI), 025..030 (PA), 031..041 (PB). Plans on disk that the old board missed: C1, F1a/F1b, GRPa/b, TMPa/b, PRCa/b, VOXa/b, LFO, ENV, EUC, FX (all draft). Architect journal has no plan reviews recorded yet.
@@ -11,8 +11,8 @@ Phases: 0 not started · 1 planning · 2 wave 1 · 3 wave 2 · 4 wave 3 · 5 wav
 
 | Task | Brief | Wave | Plan | Implementation | Notes |
 |---|---|---|---|---|---|
-| F1 | PB | 1 | awaiting-user (F1a,b; arch: approve w/ fixes) | none | |
-| C1 | PA | 1 | awaiting-user (arch: approve w/ fixes) | none | |
+| F1 | PB | 1 | approved (F1a,b; fixes pending) | none | |
+| C1 | PA | 1 | approved (fixes pending) | none | |
 | E1 | PA | 2 | none | none | expected to split into E1a/b/c |
 | LOAD | PB | 2 | draft | none | |
 | SH | PF | 2 | reviewed (SHa,b + SH-grammar; arch: approve w/ fixes) | none | grammar needs user approval |
@@ -46,16 +46,7 @@ Implementation states: none → scaffolded → dispatched → in-review (planner
 
 ## User queue (presented one at a time, top first)
 
-Wave 1 (sent to the user's phone as one multi-question ask, each answered separately):
-1. REQ-024 C1 out-of-ownership call-site edits (arch: option 1)
-2. REQ-042 C1 plan approval (arch: approve w/ fixes)
-3. REQ-031 riff_fixup pre-pass (arch: option 1 w/ conditions)
-4. REQ-032 symphonia id3v2 feature (arch: approve)
-5. REQ-033 AAC not gapless, §3.2 wording (arch: option 1)
-6. REQ-034 corrupt packets → silence (arch: option 1 + sizing fix)
-7. REQ-036 extension whitelist, §3.2 wording (arch: option 1)
-8. REQ-043 F1a plan approval
-9. REQ-044 F1b plan approval
+Wave 1 items REQ-024, 031, 032, 033, 034, 036, 042, 043, 044: all decided 2026-10-24 (approved as recommended; see decisions.md).
 
 Later (architect-reviewed, awaiting user): REQ-001, 002 (REC designs), 003, 004 (grammar), 005, 006; plan approvals for SH-grammar/SHa/SHb, RECa/b/c.
 Answered by PM: REQ-035 (from PB brief).

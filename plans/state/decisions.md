@@ -32,3 +32,15 @@ Each entry records the date, the decision, and its source (a request ID, or
 16. Commit `plans/`. The PM has standing permission to commit `plans/`-only
     snapshots to `dev` at gates and after each recorded decision.
     (`ORG.md` §5)
+
+## Wave 1 decisions (2026-10-24)
+
+- REQ-024: option 1: C1 makes the 7 call-site edits itself in one separate commit; architect checks the out-of-ownership diff at merge.
+- REQ-042: approve C1 plan, conditional on the architect's 4 editorial fixes (state/architect.md, Plan reviews: C1) applied by the planner before dispatch.
+- REQ-031: option 1: add riff_fixup.rs pre-pass, with the architect's 4 conditions.
+- REQ-032: option 1: add symphonia `id3v2` feature (architect edits Cargo.toml on integrate/wave-1 and README §1.1).
+- REQ-033: option 1: end-trim only for AAC; architect amends README §3.2 wording as in its review.
+- REQ-034: option 1: substitute silence, fail file above 10% bad packets, with the architect's silence-sizing fix (capped).
+- REQ-036: option 1: extension whitelist via `is_supported_extension`; architect amends README §3.2 wording.
+- REQ-043: approve F1a plan, conditional on the architect's fixes (silence sizing, riff_fixup trailing-junk test, Path::new).
+- REQ-044: approve F1b plan, conditional on the architect's editorial fixes.

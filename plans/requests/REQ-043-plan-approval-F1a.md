@@ -4,7 +4,7 @@ type: plan-approval
 from: PM (for planner PB-audio-files)
 tasks: [F1]
 blocks: [F1]
-status: awaiting-user
+status: approved
 created: 2026-10-24
 ---
 
@@ -25,3 +25,5 @@ Wave 1 can't start until both C1 and F1 (F1a, F1b) are approved.
 Approve with fixes (state/architect.md, "Plan reviews").
 
 ## Decision
+
+User, 2026-10-24 (via phone): **approved**, approve F1a plan, conditional on the architect's fixes (silence sizing, riff_fixup trailing-junk test, Path::new).
