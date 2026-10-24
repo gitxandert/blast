@@ -1,9 +1,14 @@
+mod au;
 pub mod decode_helpers;
+mod pcm;
+pub mod raw;
 mod riff_fixup;
 mod symphonia;
 
 #[cfg(test)]
 mod adapter_tests;
+#[cfg(test)]
+mod fixture_tests;
 #[cfg(test)]
 mod test_bytes;
 
@@ -25,9 +30,20 @@ const SYMPHONIA_EXTS: &[&str] = &[
     "wav", "wave", "aif", "aiff", "aifc", "flac", "mp1", "mp2", "mp3", "m4a", "mp4", "aac", "adts",
 ];
 
+// extensions the hand-written decoders read
+const OWN_EXTS: &[&str] = &["au", "snd", "raw", "pcm"];
+
 /// Whether `decode_file` would try this extension (lowercase, no dot).
 pub fn is_supported_extension(ext: &str) -> bool {
-    SYMPHONIA_EXTS.contains(&ext)
+    SYMPHONIA_EXTS.contains(&ext) || OWN_EXTS.contains(&ext)
+}
+
+fn is_raw(ext: &str) -> bool {
+    ext == "raw" || ext == "pcm"
+}
+
+fn is_au(ext: &str, bytes: &[u8]) -> bool {
+    ext == "au" || ext == "snd" || bytes.starts_with(au::MAGIC)
 }
 
 // the format family an extension belongs to, for `AudioFile::format`
@@ -59,9 +75,17 @@ fn check_extension(path: &Path) -> DecodeResult<String> {
     }
 }
 
-/// A track's name: its file name without directory or extension.
+/// A track's name: its file name without directory or extension (and
+/// without a raw spec suffix such as `.s16le.48000.2`).
 pub fn track_name(path: &Path) -> DecodeResult<String> {
-    match path.file_stem().and_then(|s| s.to_str()) {
+    let stem = if is_raw(&extension(path)) {
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| raw::parse_raw_name(n).0)
+    } else {
+        path.file_stem().and_then(|s| s.to_str())
+    };
+    match stem {
         Some(name) if !name.is_empty() => Ok(name.to_string()),
         _ => Err(DecodeError::InvalidData(format!(
             "File has no name: '{}'",
@@ -85,6 +109,13 @@ pub fn decode_bytes(file_name: &str, bytes: Vec<u8>) -> DecodeResult<AudioFile> 
     let path = Path::new(file_name);
     let ext = check_extension(path)?;
     let name = track_name(path)?;
+    if is_au(&ext, &bytes) {
+        return au::decode(&name, &bytes);
+    }
+    if is_raw(&ext) {
+        let spec = raw::parse_raw_name(file_name).1.complete()?;
+        return raw::decode_with(&name, &bytes, spec);
+    }
     let mut file = symphonia::decode(&name, &ext, bytes)?;
     file.format = format_family(&ext).to_string();
     Ok(file)
@@ -93,7 +124,15 @@ pub fn decode_bytes(file_name: &str, bytes: Vec<u8>) -> DecodeResult<AudioFile> 
 /// Rate, channels and layout from the headers only (no packet decoding).
 pub fn probe_file(path: &Path) -> DecodeResult<StreamInfo> {
     let ext = check_extension(path)?;
-    symphonia::probe(&ext, fs::read(path)?)
+    if is_raw(&ext) {
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        return raw::probe(file_name);
+    }
+    let bytes = fs::read(path)?;
+    if is_au(&ext, &bytes) {
+        return au::probe(&bytes);
+    }
+    symphonia::probe(&ext, bytes)
 }
 
 // parse every supported file in dir and agree on a sample rate
