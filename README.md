@@ -24,15 +24,16 @@ One of the goals of this project is to realize as many features as possible with
 - implements fast RNG with xoroshiro128+ generation, Lemire's fast modulo, and architecture-specific seeding
 
 **src/file_parsing**:
-- mpeg
-  - parses MPEG frames
-  - TODO: implement actual decoding of compressed data  
-- wav
-  - parses RIFF, fmt, and data chunks sequentially
-- aiff
-  - parses FORM, COMM, and SSND chunks sequentially
-- decode_helpers  
-  - implements custom DecodeErrors and DecodeResult for in-memory file parsing  
+- mod
+  - `decode_file`/`decode_bytes`/`probe_file`: one entry point for every supported extension
+  - `load_assets`: decodes the assets/ folder and agrees on a sample rate
+- symphonia
+  - decodes WAV, AIFF/AIFC, FLAC, MP1/2/3, AAC (MP4/ADTS), ALAC and ADPCM through symphonia
+  - fills corrupt packets with silence, so timing holds
+- riff_fixup
+  - repairs WAV/AIFF quirks symphonia rejects (wrong sizes, `data` before `fmt `, `fact`/COMM frame counts)
+- decode_helpers
+  - implements custom DecodeErrors and DecodeResult for in-memory file parsing
   - provides AudioFile struct to return necessary data for audio APIs
 
 ## Documents consulted
