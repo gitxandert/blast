@@ -33,13 +33,18 @@ impl LineEditor {
 
     // byte offset of char index `idx` (buf.len() past the end)
     fn byte_idx(&self, idx: usize) -> usize {
-        self.buf.char_indices().nth(idx).map_or(self.buf.len(), |(i, _)| i)
+        self.buf
+            .char_indices()
+            .nth(idx)
+            .map_or(self.buf.len(), |(i, _)| i)
     }
 
     // insert at the cursor and move past it;
     // control chars are dropped
     pub fn insert(&mut self, c: char) {
-        if c.is_control() { return; }
+        if c.is_control() {
+            return;
+        }
         let at = self.byte_idx(self.cur);
         self.buf.insert(at, c);
         self.cur += 1;
@@ -71,11 +76,15 @@ impl LineEditor {
     }
 
     pub fn left(&mut self) {
-        if self.cur > 0 { self.cur -= 1; }
+        if self.cur > 0 {
+            self.cur -= 1;
+        }
     }
 
     pub fn right(&mut self) {
-        if self.cur < self.len() { self.cur += 1; }
+        if self.cur < self.len() {
+            self.cur += 1;
+        }
     }
 
     // replace the line (e.g. from history); cursor goes to the end
@@ -176,7 +185,10 @@ fn parse_utf8<I: Iterator<Item = u8>>(lead: u8, bytes: &mut I) -> Key {
             _ => return Key::Ignore,
         }
     }
-    match std::str::from_utf8(&enc[..n]).ok().and_then(|s| s.chars().next()) {
+    match std::str::from_utf8(&enc[..n])
+        .ok()
+        .and_then(|s| s.chars().next())
+    {
         Some(c) if !c.is_control() => Key::Char(c),
         _ => Key::Ignore,
     }
@@ -245,7 +257,10 @@ mod tests {
     #[test]
     fn parse_delete_leaves_no_tilde() {
         assert_eq!(keys(&[27, 91, 51, 126]), vec![Key::Delete]);
-        assert_eq!(keys(&[27, 91, 51, 126, b'a']), vec![Key::Delete, Key::Char('a')]);
+        assert_eq!(
+            keys(&[27, 91, 51, 126, b'a']),
+            vec![Key::Delete, Key::Char('a')]
+        );
     }
 
     #[test]
@@ -460,7 +475,10 @@ mod tests {
     fn parse_utf8_chars() {
         assert_eq!(keys("é".as_bytes()), vec![Key::Char('é')]);
         assert_eq!(keys("€".as_bytes()), vec![Key::Char('€')]);
-        assert_eq!(keys("🥁a".as_bytes()), vec![Key::Char('🥁'), Key::Char('a')]);
+        assert_eq!(
+            keys("🥁a".as_bytes()),
+            vec![Key::Char('🥁'), Key::Char('a')]
+        );
     }
 
     #[test]
@@ -470,7 +488,10 @@ mod tests {
         assert_eq!(keys(&[0xFF, b'a']), vec![Key::Ignore, Key::Char('a')]);
         assert_eq!(keys(&[0xC3]), vec![Key::Ignore]);
         // tab, ctrl-d, NUL
-        assert_eq!(keys(&[9, 4, 0]), vec![Key::Ignore, Key::Ignore, Key::Ignore]);
+        assert_eq!(
+            keys(&[9, 4, 0]),
+            vec![Key::Ignore, Key::Ignore, Key::Ignore]
+        );
     }
 
     #[test]

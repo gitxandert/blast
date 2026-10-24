@@ -1,12 +1,12 @@
 use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::file_parsing::decode_helpers::AudioFile;
 use crate::audio_processing::{
-    blast_time::blast_time::{TempoUnit, TempoMode},
     blast_rand::{X128P, fast_seed},
+    blast_time::blast_time::{TempoMode, TempoUnit},
 };
+use crate::file_parsing::decode_helpers::AudioFile;
 
 pub struct CmdQueue {
     buf: Vec<UnsafeCell<Option<Command>>>,
@@ -68,12 +68,10 @@ impl CmdQueue {
             return None;
         }
 
-        let cmd = unsafe {
-            (*self.buf[tail].get()).take()
-        };
+        let cmd = unsafe { (*self.buf[tail].get()).take() };
 
         self.tail.store((tail + 1) % self.cap, Ordering::Release);
-        
+
         cmd
     }
 }
@@ -146,12 +144,12 @@ pub struct VelocityArgs {
 
 pub struct GroupArgs {
     pub tempo: TempoRepr,
-    pub vs_fs_ps: Vec<(usize, bool, Vec<usize>)>, 
+    pub vs_fs_ps: Vec<(usize, bool, Vec<usize>)>,
     // in Group order (entry i becomes the Group's Voice i,
     // matching the VoiceRepr idx in the GroupRepr),
     // store the ids Voice
     // with whether or not its TempoState refers to the Group's
-    // and with the ids of all of the Processes 
+    // and with the ids of all of the Processes
     // whose TempoStates refer to the Group's
 }
 
@@ -286,18 +284,21 @@ pub struct ProcRepr {
     // to all Processes
     //
     idx: usize, // index of the Process in its owner's
-                // Vec<Process>
-
+    // Vec<Process>
     #[allow(dead_code)] // not read yet; kept for targeting Processes
     owner_idx: Idx, // index of the Process's $owner
-                      // in the engine's Vec<$owner>
+    // in the engine's Vec<$owner>
     tempo: Option<TempoRepr>,
     // maybe create ProcArgs enum, one for each Process
 }
 
 impl ProcRepr {
     fn new(idx: usize, owner_idx: Idx, tempo: Option<TempoRepr>) -> Self {
-        Self { idx, owner_idx, tempo }
+        Self {
+            idx,
+            owner_idx,
+            tempo,
+        }
     }
 }
 
@@ -350,12 +351,12 @@ impl CmdProcessor {
     pub fn new(engine_state: EngineState) -> Self {
         Self { engine_state }
     }
-    
+
     pub fn parse(&mut self, cmd: String) -> CmdResult<Command> {
         let mut parts = cmd.splitn(2, ' ');
         let cmd = parts.next().unwrap();
         let args = parts.next().unwrap_or_else(|| "").to_string();
-        
+
         match cmd {
             "load" => self.try_load(args),
             "start" => self.try_start(args),
@@ -367,8 +368,12 @@ impl CmdProcessor {
             "group" => self.try_group(args),
             "tc" | "tempocon" => self.try_tc(args),
             "seq" => self.try_seq(args),
-            "q" | "quit" => Ok(Command::Quit(QuitArgs{})),
-            _ => return Err(CmdErr::NoCmd { cmd: cmd.to_owned() }),
+            "q" | "quit" => Ok(Command::Quit(QuitArgs {})),
+            _ => {
+                return Err(CmdErr::NoCmd {
+                    cmd: cmd.to_owned(),
+                });
+            }
         }
     }
 
@@ -403,17 +408,15 @@ impl CmdProcessor {
         // - call Voice::new(track, tempo_state)
         //
         let mut args = args.split_whitespace();
-        let name = args
-            .next()
-            .ok_or(CmdErr::MissingArg { 
-                arg: "name".to_string(), 
-                cmd: "load".to_string() 
-            })?;
+        let name = args.next().ok_or(CmdErr::MissingArg {
+            arg: "name".to_string(),
+            cmd: "load".to_string(),
+        })?;
         let name = name.to_string();
 
         let track = self.find_track(name.clone())?;
         let track_idx = track.idx;
-        
+
         // initialize tempo_repr with an idx of 0 because
         // a Voice will only ever have one personal TempoState
         let mut tempo_repr = TempoRepr::new(0usize);
@@ -421,35 +424,33 @@ impl CmdProcessor {
         // if a Voice by this name (currently the track name)
         // already exists, then return error
         match self.find_voice(name.clone()) {
-            Ok(_) => return Err(CmdErr::AlreadyIs { 
-                ty: "Voice".to_string(), 
-                name: name 
-            }),
+            Ok(_) => {
+                return Err(CmdErr::AlreadyIs {
+                    ty: "Voice".to_string(),
+                    name: name,
+                });
+            }
             Err(_) => (),
         }
-        
+
         while let Some(arg) = args.next() {
             match arg {
                 "-t" | "--tempo" => {
-                    let t_arg = args
-                        .next()
-                        .ok_or(CmdErr::MissingArg { 
-                            arg: "unit".to_string(), 
-                            cmd: "load -t/--tempo".to_string() 
-                        })?;
+                    let t_arg = args.next().ok_or(CmdErr::MissingArg {
+                        arg: "unit".to_string(),
+                        cmd: "load -t/--tempo".to_string(),
+                    })?;
 
                     let mut t_args = t_arg.split(':');
 
                     let u = t_args.next().unwrap();
                     if u == "c" {
                         // find TempoContext
-                        let tc_name = t_args
-                            .next()
-                            .ok_or(CmdErr::MissingArg { 
-                                arg: "name".to_string(), 
-                                cmd: "load -t c:???".to_string() 
-                            })?;
-                        
+                        let tc_name = t_args.next().ok_or(CmdErr::MissingArg {
+                            arg: "name".to_string(),
+                            cmd: "load -t c:???".to_string(),
+                        })?;
+
                         tempo_repr = match self.find_tc(tc_name.to_string()) {
                             Ok(tc) => TempoRepr::clone_owner(&tc),
                             Err(error) => return Err(error.into()),
@@ -458,12 +459,10 @@ impl CmdProcessor {
                     }
                     if u == "g" {
                         // find Group
-                        let g_name = t_args
-                            .next()
-                            .ok_or(CmdErr::MissingArg { 
-                                arg: "name".to_string(), 
-                                cmd: "load -t g:???".to_string() 
-                            })?;
+                        let g_name = t_args.next().ok_or(CmdErr::MissingArg {
+                            arg: "name".to_string(),
+                            cmd: "load -t g:???".to_string(),
+                        })?;
 
                         tempo_repr = match self.find_group(g_name.to_string()) {
                             Ok(g) => TempoRepr::clone_from(&g.tempo, g.idx),
@@ -473,49 +472,54 @@ impl CmdProcessor {
                     }
 
                     // make new TempoState from matched arguments
-                                    
+
                     let unit = match u {
                         "s" => TempoUnit::Samples,
                         "m" => TempoUnit::Millis,
                         "b" => TempoUnit::Bpm,
-                        _ => return Err(CmdErr::InvalidArg { 
-                            arg: u.to_owned(), 
-                            cmd: "load -t".to_string() 
-                        }),
+                        _ => {
+                            return Err(CmdErr::InvalidArg {
+                                arg: u.to_owned(),
+                                cmd: "load -t".to_string(),
+                            });
+                        }
                     };
 
                     let interval = t_args
                         .next()
-                        .ok_or(CmdErr::MissingArg { 
-                            arg: "interval".to_string(), 
-                            cmd: "load -t".to_string() 
+                        .ok_or(CmdErr::MissingArg {
+                            arg: "interval".to_string(),
+                            cmd: "load -t".to_string(),
                         })
                         .and_then(|raw| {
-                            raw.parse::<f32>()
-                               .map_err(|_| CmdErr::InvalidArg { 
-                                    arg: raw.to_owned(), 
-                                    cmd: "load -t".to_string() 
-                               })
+                            raw.parse::<f32>().map_err(|_| CmdErr::InvalidArg {
+                                arg: raw.to_owned(),
+                                cmd: "load -t".to_string(),
+                            })
                         })?;
 
                     tempo_repr.init(TempoMode::Voice, unit, interval);
                 }
                 // no argument matched
-                _ => return Err(CmdErr::InvalidArg { 
-                    arg: arg.to_owned(), 
-                    cmd: "load".to_string() 
-                }),
+                _ => {
+                    return Err(CmdErr::InvalidArg {
+                        arg: arg.to_owned(),
+                        cmd: "load".to_string(),
+                    });
+                }
             }
         }
         // if this is the first Voice,
         // it will be indexed at 0
         let idx = self.engine_state.voices.len();
-        self.engine_state.voices.insert(
-            name,
-            VoiceRepr::new(idx, TempoRepr::clone(&tempo_repr))
-        );
-        
-        Ok(Command::Load(LoadArgs{track_idx, tempo_repr}))
+        self.engine_state
+            .voices
+            .insert(name, VoiceRepr::new(idx, TempoRepr::clone(&tempo_repr)));
+
+        Ok(Command::Load(LoadArgs {
+            track_idx,
+            tempo_repr,
+        }))
     }
 
     // the following could start multiple things at the same time
@@ -523,36 +527,28 @@ impl CmdProcessor {
     // maybe implement "all" as a reserved word
     //
     fn try_start(&mut self, args: String) -> CmdResult<Command> {
-        let (ty, name) = self.parse_type_and_name(
-            args, "start".to_string()
-        )?;
+        let (ty, name) = self.parse_type_and_name(args, "start".to_string())?;
         let idx = self.get_idx(ty, name)?;
-        Ok(Command::Start(StartArgs{ idx }))
+        Ok(Command::Start(StartArgs { idx }))
     }
 
     fn try_pause(&mut self, args: String) -> CmdResult<Command> {
-        let (ty, name) = self.parse_type_and_name(
-            args, "pause".to_string()
-        )?;
+        let (ty, name) = self.parse_type_and_name(args, "pause".to_string())?;
         let idx = self.get_idx(ty, name)?;
-        Ok(Command::Pause(PauseArgs{ idx }))
-    } 
+        Ok(Command::Pause(PauseArgs { idx }))
+    }
 
     fn try_resume(&mut self, args: String) -> CmdResult<Command> {
-        let (ty, name) = self.parse_type_and_name(
-            args, "resume".to_string()
-        )?;
+        let (ty, name) = self.parse_type_and_name(args, "resume".to_string())?;
         let idx = self.get_idx(ty, name)?;
-        Ok(Command::Resume(ResumeArgs{ idx }))
-    }  
+        Ok(Command::Resume(ResumeArgs { idx }))
+    }
 
     fn try_stop(&mut self, args: String) -> CmdResult<Command> {
-        let (ty, name) = self.parse_type_and_name(
-            args, "stop".to_string()
-        )?;
+        let (ty, name) = self.parse_type_and_name(args, "stop".to_string())?;
         let idx = self.get_idx(ty, name)?;
-        Ok(Command::Stop(StopArgs{ idx }))
-    } 
+        Ok(Command::Stop(StopArgs { idx }))
+    }
 
     fn try_unload(&mut self, name: String) -> CmdResult<Command> {
         // accepts voice or group.voice; gets idx and removes
@@ -561,14 +557,12 @@ impl CmdProcessor {
         let idx = self.find_voice_idx(name.clone())?;
 
         let (voices, v_name) = match name.split_once('.') {
-            Some((group, voice)) => {
-                (&mut self.find_group(group.to_string())?.voices, voice)
-            }
+            Some((group, voice)) => (&mut self.find_group(group.to_string())?.voices, voice),
             None => (&mut self.engine_state.voices, name.as_str()),
         };
         let removed = voices.remove(v_name).unwrap().idx; // found above
 
-        // since all Voices after the removed Voice will be 
+        // since all Voices after the removed Voice will be
         // shifted to the left, decrease all VoiceReprs with
         // an idx greater than the removed Voice's
         for (_, voice) in voices.iter_mut() {
@@ -577,54 +571,49 @@ impl CmdProcessor {
             }
         }
 
-        Ok(Command::Unload(UnloadArgs{ idx }))
+        Ok(Command::Unload(UnloadArgs { idx }))
     }
 
     fn try_velocity(&mut self, args: String) -> CmdResult<Command> {
         let mut args = args.splitn(2, ' ');
-        
-        let name = args
-            .next()
-            .ok_or(CmdErr::MissingArg{ 
-                arg: "name".to_string(), 
-                cmd: "velocity".to_string() 
-            })?;
-        
+
+        let name = args.next().ok_or(CmdErr::MissingArg {
+            arg: "name".to_string(),
+            cmd: "velocity".to_string(),
+        })?;
+
         // Idx::Voice or Idx::GroupVoice
         let idx = self.get_idx("-v".to_string(), name.to_string())?;
 
         let val = args
             .next()
-            .ok_or(CmdErr::MissingArg{ 
-                arg: "value".to_string(), 
-                cmd: "velocity".to_string() 
+            .ok_or(CmdErr::MissingArg {
+                arg: "value".to_string(),
+                cmd: "velocity".to_string(),
             })
             .and_then(|raw| {
-                raw.parse::<f32>()
-                   .map_err(|_| CmdErr::InvalidArg { 
-                        arg: raw.to_owned(), 
-                        cmd: "velocity".to_string() 
-                   })
+                raw.parse::<f32>().map_err(|_| CmdErr::InvalidArg {
+                    arg: raw.to_owned(),
+                    cmd: "velocity".to_string(),
+                })
             })?;
 
-        Ok(Command::Velocity(VelocityArgs{ idx, val }))
+        Ok(Command::Velocity(VelocityArgs { idx, val }))
     }
 
     fn try_group(&mut self, args: String) -> CmdResult<Command> {
         let mut args = args.split_whitespace();
-        let name = args
-            .next()
-            .ok_or(CmdErr::MissingArg { 
-                arg: "name".to_string(), 
-                cmd: "group".to_string() 
-            })?;
+        let name = args.next().ok_or(CmdErr::MissingArg {
+            arg: "name".to_string(),
+            cmd: "group".to_string(),
+        })?;
 
         // a second Group by the same name would replace the first
         // in the mirror but not in the engine, shifting every later idx
         if self.engine_state.groups.contains_key(name) {
-            return Err(CmdErr::AlreadyIs { 
-                ty: "Group".to_string(), 
-                name: name.to_string() 
+            return Err(CmdErr::AlreadyIs {
+                ty: "Group".to_string(),
+                name: name.to_string(),
             });
         }
 
@@ -639,96 +628,95 @@ impl CmdProcessor {
 
         while let Some(arg) = args.next() {
             match arg {
-                "-t" | "--tempo" => {
-                    match args.next() {
-                        Some(t) => {
-                            let mut t_args = t.split(':');
-                            let u_str = t_args
+                "-t" | "--tempo" => match args.next() {
+                    Some(t) => {
+                        let mut t_args = t.split(':');
+                        let u_str = t_args.next().ok_or(CmdErr::MissingArg {
+                            arg: "unit".to_string(),
+                            cmd: "group -t".to_string(),
+                        })?;
+
+                        if u_str == "c" {
+                            let tc_name = t_args.next().ok_or(CmdErr::MissingArg {
+                                arg: "TempoContext name".to_string(),
+                                cmd: "group -t".to_string(),
+                            })?;
+
+                            match self.find_tc(tc_name.to_string()) {
+                                Ok(tc) => tempo = TempoRepr::clone_owner(&tc),
+                                Err(error) => return Err(error.into()),
+                            }
+                        } else {
+                            let unit = match u_str {
+                                "s" => TempoUnit::Samples,
+                                "m" => TempoUnit::Millis,
+                                "b" => TempoUnit::Bpm,
+                                _ => {
+                                    return Err(CmdErr::InvalidArg {
+                                        arg: u_str.to_string(),
+                                        cmd: "group -t".to_string(),
+                                    });
+                                }
+                            };
+                            let interval = t_args
                                 .next()
-                                .ok_or(CmdErr::MissingArg { 
-                                    arg: "unit".to_string(), 
-                                    cmd: "group -t".to_string() 
+                                .ok_or(CmdErr::MissingArg {
+                                    arg: "interval".to_string(),
+                                    cmd: "group -t".to_string(),
+                                })
+                                .and_then(|raw| {
+                                    raw.parse::<f32>().map_err(|_| CmdErr::InvalidArg {
+                                        arg: raw.to_string(),
+                                        cmd: "group -t".to_string(),
+                                    })
                                 })?;
 
-                            if u_str == "c" {
-                                let tc_name = t_args
-                                    .next()
-                                    .ok_or(CmdErr::MissingArg { 
-                                        arg: "TempoContext name".to_string(), 
-                                        cmd: "group -t".to_string() 
-                                    })?;
-
-                                match self.find_tc(tc_name.to_string()) {
-                                    Ok(tc) => tempo = TempoRepr::clone_owner(&tc),
-                                    Err(error) => return Err(error.into()),
-                                }
-                            } else {
-                                let unit = match u_str {
-                                    "s" => TempoUnit::Samples,
-                                    "m" => TempoUnit::Millis,
-                                    "b" => TempoUnit::Bpm,
-                                    _ => return Err(CmdErr::InvalidArg { 
-                                            arg: u_str.to_string(), 
-                                            cmd: "group -t".to_string() 
-                                        }),
-                                };
-                                let interval = t_args
-                                    .next()
-                                    .ok_or(CmdErr::MissingArg { 
-                                        arg: "interval".to_string(), 
-                                        cmd: "group -t".to_string() 
-                                    })
-                                    .and_then(|raw| {
-                                        raw.parse::<f32>()
-                                           .map_err(|_| CmdErr::InvalidArg { 
-                                                arg: raw.to_string(), 
-                                                cmd: "group -t".to_string() 
-                                            })
-                                    })?;
-    
-                                let mut new_tempo = TempoRepr::new(0);
-                                new_tempo.init(TempoMode::Group, unit, interval);
-                                tempo = new_tempo;
-                            }
+                            let mut new_tempo = TempoRepr::new(0);
+                            new_tempo.init(TempoMode::Group, unit, interval);
+                            tempo = new_tempo;
                         }
-                        None => return Err(CmdErr::MissingArg { 
-                            arg: "arguments".to_string(), 
-                            cmd: "group -t".to_string() 
-                        }),
                     }
-                }
-                "-v" | "--voices" => {
-                    match args.next() {
-                        Some(v) => {
-                            for name in v.split(',') {
-                                let name = name.to_string();
-                                if !self.engine_state.voices.contains_key(&name) {
-                                    return Err(CmdErr::NoVoice { 
-                                        name: name, 
-                                        group: None 
-                                    });
-                                }
-                                if v_names.contains(&name) {
-                                    return Err(CmdErr::Formatting { 
-                                        err: format!("Voice '{}' listed more than once", name) 
-                                    });
-                                }
-                                v_names.push(name);
+                    None => {
+                        return Err(CmdErr::MissingArg {
+                            arg: "arguments".to_string(),
+                            cmd: "group -t".to_string(),
+                        });
+                    }
+                },
+                "-v" | "--voices" => match args.next() {
+                    Some(v) => {
+                        for name in v.split(',') {
+                            let name = name.to_string();
+                            if !self.engine_state.voices.contains_key(&name) {
+                                return Err(CmdErr::NoVoice {
+                                    name: name,
+                                    group: None,
+                                });
                             }
+                            if v_names.contains(&name) {
+                                return Err(CmdErr::Formatting {
+                                    err: format!("Voice '{}' listed more than once", name),
+                                });
+                            }
+                            v_names.push(name);
                         }
-                        None => return Err(CmdErr::MissingArg { 
-                            arg: "arguments".to_string(), 
-                            cmd: "group -v".to_string() 
-                        }),
                     }
+                    None => {
+                        return Err(CmdErr::MissingArg {
+                            arg: "arguments".to_string(),
+                            cmd: "group -v".to_string(),
+                        });
+                    }
+                },
+                _ => {
+                    return Err(CmdErr::InvalidArg {
+                        arg: arg.to_owned(),
+                        cmd: "group".to_string(),
+                    });
                 }
-                _ => return Err(CmdErr::InvalidArg { 
-                        arg: arg.to_owned(), 
-                        cmd: "group".to_string() 
-                    }),
             }
         }
-       
+
         // all args are valid; move the Voices out of the top level
         //
         // kept in command-line (Group) order, so that flags and
@@ -742,7 +730,7 @@ impl CmdProcessor {
             let mut voice = self.engine_state.voices.remove(&name).unwrap();
             v_ids.push(voice.idx);
             voice.idx = voices.len(); // assign new index
-                                      // in Group's Vec
+            // in Group's Vec
             voices.push((name, voice));
         }
 
@@ -805,50 +793,50 @@ impl CmdProcessor {
             p_ids.push(p_i);
         }
 
-        let group = GroupRepr::new(g_idx, TempoRepr::clone(&tempo), voices.into_iter().collect());
+        let group = GroupRepr::new(
+            g_idx,
+            TempoRepr::clone(&tempo),
+            voices.into_iter().collect(),
+        );
 
         self.engine_state.groups.insert(name.to_string(), group);
 
         // keep Group order; the engine removes Voices from
         // Conductor.voices in reverse itself
-        let vs_fs_ps: Vec<(usize, bool, Vec<usize>)> = 
-            v_ids.into_iter()
-                 .zip(v_flags)
-                 .zip(p_ids)
-                 .map(|((a, b), c) | (a, b, c))
-                 .collect();
+        let vs_fs_ps: Vec<(usize, bool, Vec<usize>)> = v_ids
+            .into_iter()
+            .zip(v_flags)
+            .zip(p_ids)
+            .map(|((a, b), c)| (a, b, c))
+            .collect();
 
         Ok(Command::Group(GroupArgs { tempo, vs_fs_ps }))
     }
 
     fn try_tc(&mut self, args: String) -> CmdResult<Command> {
         let mut args = args.split_whitespace();
-        let name = args
-            .next()
-            .ok_or(CmdErr::MissingArg { 
-                arg: "name".to_string(), 
-                cmd: "tempocon".to_string() 
-            })?;        
+        let name = args.next().ok_or(CmdErr::MissingArg {
+            arg: "name".to_string(),
+            cmd: "tempocon".to_string(),
+        })?;
 
         // see try_group
         if self.engine_state.tempo_cons.contains_key(name) {
-            return Err(CmdErr::AlreadyIs { 
-                ty: "TempoContext".to_string(), 
-                name: name.to_string() 
+            return Err(CmdErr::AlreadyIs {
+                ty: "TempoContext".to_string(),
+                name: name.to_string(),
             });
         }
 
-        let tempo = args
-            .next()
-            .ok_or(CmdErr::MissingArg {
-                arg: "tempo".to_string(),
-                cmd: "tempocon".to_string()
-            })?;
+        let tempo = args.next().ok_or(CmdErr::MissingArg {
+            arg: "tempo".to_string(),
+            cmd: "tempocon".to_string(),
+        })?;
 
         let tempo: Vec<_> = tempo.split(':').collect();
 
         if tempo.len() != 2 {
-            return Err(CmdErr::TempoFormatting{});
+            return Err(CmdErr::TempoFormatting {});
         }
 
         let u = tempo.get(0).unwrap();
@@ -856,24 +844,26 @@ impl CmdProcessor {
             "b" => TempoUnit::Bpm,
             "m" => TempoUnit::Millis,
             "s" => TempoUnit::Samples,
-            _ => return Err(CmdErr::InvalidArg {
-                               arg: u.to_string(),
-                               cmd: "-t/--tempo".to_string(),
-                            }),
+            _ => {
+                return Err(CmdErr::InvalidArg {
+                    arg: u.to_string(),
+                    cmd: "-t/--tempo".to_string(),
+                });
+            }
         };
 
         let int_str = tempo.get(1).unwrap();
-        let interval = int_str
-                       .parse::<f32>()
-                       .map_err(|_| CmdErr::InvalidArg {
-                                    arg: tempo[1].to_owned(),
-                                    cmd: "-t/--tempo".to_string(),
-                       })?;
+        let interval = int_str.parse::<f32>().map_err(|_| CmdErr::InvalidArg {
+            arg: tempo[1].to_owned(),
+            cmd: "-t/--tempo".to_string(),
+        })?;
 
         let mut tempo_state = TempoRepr::new(self.engine_state.tempo_cons.len());
         tempo_state.init(TempoMode::Context, unit, interval);
         let ts_clone = TempoRepr::clone(&tempo_state);
-        self.engine_state.tempo_cons.insert(name.to_string(), tempo_state);
+        self.engine_state
+            .tempo_cons
+            .insert(name.to_string(), tempo_state);
 
         Ok(Command::Tc(TcArgs { tempo: ts_clone }))
     }
@@ -884,12 +874,10 @@ impl CmdProcessor {
     //       insert(name, ...)
     fn try_seq(&mut self, args: String) -> CmdResult<Command> {
         let mut args = args.split_whitespace();
-        let name = args
-            .next()
-            .ok_or(CmdErr::MissingArg { 
-                arg: "name".to_string(), 
-                cmd: "seq".to_string() 
-            })?;
+        let name = args.next().ok_or(CmdErr::MissingArg {
+            arg: "name".to_string(),
+            cmd: "seq".to_string(),
+        })?;
         let name = name.to_string();
 
         // default assign to Process:
@@ -914,27 +902,23 @@ impl CmdProcessor {
         while let Some(arg) = args.next() {
             match arg {
                 "-n" | "--name" => {
-                    let n_arg = args
-                        .next()
-                        .ok_or(CmdErr::MissingArg {
-                            arg: "name".to_string(),
-                            cmd: "seq -n".to_string(),
-                        })?;
+                    let n_arg = args.next().ok_or(CmdErr::MissingArg {
+                        arg: "name".to_string(),
+                        cmd: "seq -n".to_string(),
+                    })?;
                     p_name = Some(n_arg.to_string());
                 }
                 "-t" | "--tempo" => {
-                    let t_arg = args
-                        .next()
-                        .ok_or(CmdErr::MissingArg {
-                            arg: "unit:interval".to_string(),
-                            cmd: "seq -t".to_string(),
-                        })?;
+                    let t_arg = args.next().ok_or(CmdErr::MissingArg {
+                        arg: "unit:interval".to_string(),
+                        cmd: "seq -t".to_string(),
+                    })?;
 
                     let t_args: Vec<_> = t_arg.split(':').collect();
 
                     if t_args.len() != 2 {
                         if t_args[0] != "v" {
-                            return Err(CmdErr::TempoFormatting{});
+                            return Err(CmdErr::TempoFormatting {});
                         } else {
                             // refer to Voice's TempoState
                             tempo = {
@@ -971,36 +955,35 @@ impl CmdProcessor {
                         "s" => TempoUnit::Samples,
                         "m" => TempoUnit::Millis,
                         "b" => TempoUnit::Bpm,
-                        _ => return Err(CmdErr::InvalidArg {
-                            arg: u.to_string(), 
-                            cmd: "seq -t".to_string()
-                        }),
+                        _ => {
+                            return Err(CmdErr::InvalidArg {
+                                arg: u.to_string(),
+                                cmd: "seq -t".to_string(),
+                            });
+                        }
                     };
 
                     let int_str = t_args.get(1).unwrap();
-                    let interval = int_str
-                                .parse::<f32>()
-                                .map_err(|_| CmdErr::InvalidArg { 
-                                    arg: int_str.to_string(), 
-                                    cmd: "seq -t".to_string() 
-                                })?;
+                    let interval = int_str.parse::<f32>().map_err(|_| CmdErr::InvalidArg {
+                        arg: int_str.to_string(),
+                        cmd: "seq -t".to_string(),
+                    })?;
 
                     tempo.init(TempoMode::Process, unit, interval);
                 }
                 "-p" | "--period" => {
                     period = args
                         .next()
-                        .ok_or(CmdErr::MissingArg { 
-                            arg: "value".to_string(), 
-                            cmd: "seq -p".to_string() 
+                        .ok_or(CmdErr::MissingArg {
+                            arg: "value".to_string(),
+                            cmd: "seq -p".to_string(),
                         })
-                        .and_then(|raw| 
-                            raw.parse::<usize>()
-                               .map_err(|_| CmdErr::InvalidArg { 
-                                   arg: raw.to_owned(), 
-                                   cmd: "seq -p".to_string() 
-                               })
-                        )?;
+                        .and_then(|raw| {
+                            raw.parse::<usize>().map_err(|_| CmdErr::InvalidArg {
+                                arg: raw.to_owned(),
+                                cmd: "seq -p".to_string(),
+                            })
+                        })?;
 
                     // a period of 0 has no room for steps
                     if period == 0 {
@@ -1011,12 +994,10 @@ impl CmdProcessor {
                     }
                 }
                 "-s" | "--steps" => {
-                    let s_arg = args
-                        .next()
-                        .ok_or(CmdErr::MissingArg {
-                            arg: "value".to_string(),
-                            cmd: "seq -s".to_string(),
-                        })?;
+                    let s_arg = args.next().ok_or(CmdErr::MissingArg {
+                        arg: "value".to_string(),
+                        cmd: "seq -s".to_string(),
+                    })?;
 
                     let step_strs: Vec<&str> = s_arg.split(',').collect();
 
@@ -1029,10 +1010,12 @@ impl CmdProcessor {
                     for step in step_strs {
                         match step.parse::<f32>() {
                             Ok(val) => steps.push(val),
-                            Err(_) => return Err(CmdErr::InvalidArg {
+                            Err(_) => {
+                                return Err(CmdErr::InvalidArg {
                                     arg: step.to_owned(),
                                     cmd: "seq -s".to_string(),
-                                }),
+                                });
+                            }
                         }
                     }
 
@@ -1075,7 +1058,7 @@ impl CmdProcessor {
                         }
                         None
                     };
-                    
+
                     // use chance.len() if too many arguments were provided
                     let len = {
                         if c_strs.len() > chance.len() {
@@ -1103,11 +1086,12 @@ impl CmdProcessor {
 
                                         // get chance first in case index = 'a'
                                         let chance_str = at_index.get(1).unwrap();
-                                        let chance_val = chance_str
-                                            .parse::<f32>()
-                                            .map_err(|_| CmdErr::InvalidArg {
-                                                arg: chance_str.to_string(),
-                                                cmd: "seq -c".to_string(),
+                                        let chance_val =
+                                            chance_str.parse::<f32>().map_err(|_| {
+                                                CmdErr::InvalidArg {
+                                                    arg: chance_str.to_string(),
+                                                    cmd: "seq -c".to_string(),
+                                                }
                                             })?;
 
                                         let index_str = at_index.get(0).unwrap();
@@ -1120,13 +1104,13 @@ impl CmdProcessor {
                                             continue;
                                         }
 
-                                        let index = index_str
-                                                    .parse::<f32>()
-                                                    .map_err(|_| CmdErr::InvalidArg {
-                                                        arg: index_str.to_string(),
-                                                        cmd: "seq -c".to_string(),
-                                                    })?;
-                                        
+                                        let index = index_str.parse::<f32>().map_err(|_| {
+                                            CmdErr::InvalidArg {
+                                                arg: index_str.to_string(),
+                                                cmd: "seq -c".to_string(),
+                                            }
+                                        })?;
+
                                         let mut found = false;
                                         for i in 0..steps.len() {
                                             let step = *steps.get(i).unwrap();
@@ -1138,7 +1122,7 @@ impl CmdProcessor {
                                         }
                                         if !found {
                                             return Err(CmdErr::Formatting {
-                                                err: "Invalid index for seq -c".to_string()
+                                                err: "Invalid index for seq -c".to_string(),
                                             });
                                         }
                                     }
@@ -1151,39 +1135,39 @@ impl CmdProcessor {
                                                 }
                                             );
                                         }
-                                        
+
                                         let chance_str = at_indices.get(1).unwrap();
-                                        let chance_val = chance_str
-                                                         .parse::<f32>()
-                                                         .map_err(|_| CmdErr::InvalidArg {
-                                                            arg: chance_str.to_string(),
-                                                            cmd: "seq -c".to_string(),
-                                                         })?;
+                                        let chance_val =
+                                            chance_str.parse::<f32>().map_err(|_| {
+                                                CmdErr::InvalidArg {
+                                                    arg: chance_str.to_string(),
+                                                    cmd: "seq -c".to_string(),
+                                                }
+                                            })?;
 
                                         let indices = at_indices.get(0).unwrap();
                                         let indices: Vec<&str> = indices.split('-').collect();
                                         if indices.len() != 2 {
-                                            return Err(
-                                                CmdErr::Formatting {
-                                                    err: "Ranges must be formatted lower-upper".to_string(),
-                                                }
-                                            );
+                                            return Err(CmdErr::Formatting {
+                                                err: "Ranges must be formatted lower-upper"
+                                                    .to_string(),
+                                            });
                                         }
 
                                         let i1_str = indices.get(0).unwrap();
-                                        let idx1 = i1_str
-                                                   .parse::<f32>()
-                                                   .map_err(|_| CmdErr::InvalidArg {
-                                                        arg: i1_str.to_string(),
-                                                        cmd: "seq -c".to_string(),
-                                                   })?;
+                                        let idx1 = i1_str.parse::<f32>().map_err(|_| {
+                                            CmdErr::InvalidArg {
+                                                arg: i1_str.to_string(),
+                                                cmd: "seq -c".to_string(),
+                                            }
+                                        })?;
                                         let i2_str = indices.get(1).unwrap();
-                                        let idx2 = i2_str
-                                                   .parse::<f32>()
-                                                   .map_err(|_| CmdErr::InvalidArg {
-                                                        arg: i2_str.to_string(),
-                                                        cmd: "seq -c".to_string(),
-                                                   })?;
+                                        let idx2 = i2_str.parse::<f32>().map_err(|_| {
+                                            CmdErr::InvalidArg {
+                                                arg: i2_str.to_string(),
+                                                cmd: "seq -c".to_string(),
+                                            }
+                                        })?;
 
                                         let mut lower = idx1;
                                         let mut upper = idx2;
@@ -1192,7 +1176,7 @@ impl CmdProcessor {
                                             lower = idx2;
                                             upper = idx1;
                                         }
-                        
+
                                         // steps can be in any order, so check
                                         // whether any step fell in the range
                                         let mut found = false;
@@ -1206,7 +1190,7 @@ impl CmdProcessor {
 
                                         if !found {
                                             return Err(CmdErr::Formatting {
-                                                err: "seq -c range applies to nothing".to_string()
+                                                err: "seq -c range applies to nothing".to_string(),
                                             });
                                         }
                                     }
@@ -1215,16 +1199,15 @@ impl CmdProcessor {
                             }
                             // no special chars; just assign value at current index
                             None => {
-                                let chance_val = string
-                                                 .parse::<f32>()
-                                                 .map_err(|_| CmdErr::InvalidArg { 
-                                                     arg: string.to_string(), 
-                                                     cmd: "seq -c".to_string() 
-                                                 })?;
+                                let chance_val =
+                                    string.parse::<f32>().map_err(|_| CmdErr::InvalidArg {
+                                        arg: string.to_string(),
+                                        cmd: "seq -c".to_string(),
+                                    })?;
                                 chance[i] = chance_val;
                             }
                         }
-                    }                   
+                    }
                 }
                 "-j" | "--jitter" => {
                     // a value specifies jitter for the step
@@ -1264,9 +1247,11 @@ impl CmdProcessor {
                         let (early, late) = match sides.len() {
                             1 => (sides[0], sides[0]),
                             2 => (sides[0], sides[1]),
-                            _ => return Err(CmdErr::Formatting {
-                                err: "Jitter must be formatted early|late".to_string()
-                            }),
+                            _ => {
+                                return Err(CmdErr::Formatting {
+                                    err: "Jitter must be formatted early|late".to_string(),
+                                });
+                            }
                         };
 
                         let mut out = [0f32; 4];
@@ -1274,12 +1259,10 @@ impl CmdProcessor {
                             let bounds: Vec<&str> = side.split('-').collect();
                             let mut vals = Vec::<f32>::new();
                             for b in &bounds {
-                                let val = b
-                                    .parse::<f32>()
-                                    .map_err(|_| CmdErr::InvalidArg {
-                                        arg: spec.to_string(),
-                                        cmd: "seq -j".to_string(),
-                                    })?;
+                                let val = b.parse::<f32>().map_err(|_| CmdErr::InvalidArg {
+                                    arg: spec.to_string(),
+                                    cmd: "seq -j".to_string(),
+                                })?;
                                 vals.push(val);
                             }
 
@@ -1287,9 +1270,12 @@ impl CmdProcessor {
                                 // e is the range 0.0-e
                                 1 => (0f32, vals[0]),
                                 2 => (vals[0].min(vals[1]), vals[0].max(vals[1])),
-                                _ => return Err(CmdErr::Formatting {
-                                    err: "Jitter ranges must be formatted lower-upper".to_string()
-                                }),
+                                _ => {
+                                    return Err(CmdErr::Formatting {
+                                        err: "Jitter ranges must be formatted lower-upper"
+                                            .to_string(),
+                                    });
+                                }
                             };
                             out[i * 2] = min;
                             out[i * 2 + 1] = max;
@@ -1304,7 +1290,8 @@ impl CmdProcessor {
                         let at_index: Vec<&str> = string.split(':').collect();
                         if at_index.len() > 2 {
                             return Err(CmdErr::Formatting {
-                                err: "Indexed jitter arguments must be formatted beat:jitter".to_string(),
+                                err: "Indexed jitter arguments must be formatted beat:jitter"
+                                    .to_string(),
                             });
                         }
 
@@ -1356,12 +1343,17 @@ impl CmdProcessor {
                         }
                         if !found {
                             return Err(CmdErr::Formatting {
-                                err: "seq -j index applies to nothing".to_string()
+                                err: "seq -j index applies to nothing".to_string(),
                             });
                         }
                     }
                 }
-                _ => return Err(CmdErr::InvalidArg { arg: arg.to_owned(), cmd: "seq".to_string() }),
+                _ => {
+                    return Err(CmdErr::InvalidArg {
+                        arg: arg.to_owned(),
+                        cmd: "seq".to_string(),
+                    });
+                }
             }
         }
 
@@ -1400,18 +1392,13 @@ impl CmdProcessor {
             }
         };
 
-        let repr = ProcRepr::new(
-            voice.processes.len(), 
-            owner, 
-            Some(TempoRepr::clone(&tempo))
-        );
+        let repr = ProcRepr::new(voice.processes.len(), owner, Some(TempoRepr::clone(&tempo)));
         voice.processes.insert(p_name, repr);
         // push tempo to proc_tempi only if owned by the Process
         if tempo.mode == TempoMode::Process {
-            voice.proc_tempi.insert(
-                voice.proc_tempi.len(), 
-                TempoRepr::clone(&tempo)
-            );
+            voice
+                .proc_tempi
+                .insert(voice.proc_tempi.len(), TempoRepr::clone(&tempo));
         }
 
         let args = SeqArgs {
@@ -1431,18 +1418,14 @@ impl CmdProcessor {
     //
     fn parse_type_and_name(&self, args: String, cmd: String) -> StateResult<(String, String)> {
         let mut args = args.split_whitespace();
-        let first = args
-            .next()
-            .ok_or(StateErr::MissingArg { 
-                arg: "type and name".to_string(), 
-                cmd: cmd.clone() 
-            })?;
-        let second = args
-            .next()
-            .ok_or(StateErr::MissingArg { 
-                arg: "type or name".to_string(), 
-                cmd: cmd
-            })?;
+        let first = args.next().ok_or(StateErr::MissingArg {
+            arg: "type and name".to_string(),
+            cmd: cmd.clone(),
+        })?;
+        let second = args.next().ok_or(StateErr::MissingArg {
+            arg: "type or name".to_string(),
+            cmd: cmd,
+        })?;
 
         Ok((first.to_string(), second.to_string()))
     }
@@ -1458,27 +1441,30 @@ impl CmdProcessor {
                 let t = self.find_tc(name)?;
                 Ok(Idx::Tempo(t.idx))
             }
-            _ => return Err(StateErr::MissingArg { 
-                arg: "type".to_string(), 
-                cmd: "-v/-g/-t".to_string() 
-            }),
+            _ => {
+                return Err(StateErr::MissingArg {
+                    arg: "type".to_string(),
+                    cmd: "-v/-g/-t".to_string(),
+                });
+            }
         }
     }
 
     fn find_track(&mut self, name: String) -> StateResult<&mut TrackRepr> {
-        self.engine_state.tracks
+        self.engine_state
+            .tracks
             .get_mut(&name)
-            .ok_or(StateErr::NoItem { 
-                ty: "track".to_string(), 
-                name: name
+            .ok_or(StateErr::NoItem {
+                ty: "track".to_string(),
+                name: name,
             })
     }
 
-    fn find_voice(&mut self, args: String) -> StateResult<&mut VoiceRepr> {      
+    fn find_voice(&mut self, args: String) -> StateResult<&mut VoiceRepr> {
         let args: Vec<&str> = args.split('.').collect();
         if args.len() > 2 {
-            return Err(StateErr::Formatting { 
-                err: "Too many delimiters for format group.voice".to_string() 
+            return Err(StateErr::Formatting {
+                err: "Too many delimiters for format group.voice".to_string(),
             });
         }
 
@@ -1486,11 +1472,12 @@ impl CmdProcessor {
         if args.len() == 1 {
             let v_name = args.get(0).unwrap();
             let v_name = v_name.to_string();
-            self.engine_state.voices
+            self.engine_state
+                .voices
                 .get_mut(&v_name)
-                .ok_or(StateErr::NoVoice { 
-                    name: v_name, 
-                    group: None 
+                .ok_or(StateErr::NoVoice {
+                    name: v_name,
+                    group: None,
                 })
         } else {
             let group = args.get(0).unwrap();
@@ -1499,18 +1486,14 @@ impl CmdProcessor {
             let voice = voice.to_string();
 
             match self.engine_state.groups.get_mut(&group) {
-                Some(g) => {
-                    g.voices.
-                        get_mut(&voice)
-                        .ok_or(StateErr::NoVoice { 
-                            name: voice, 
-                            group: Some(group)
-                        })
-                }
+                Some(g) => g.voices.get_mut(&voice).ok_or(StateErr::NoVoice {
+                    name: voice,
+                    group: Some(group),
+                }),
                 None => {
-                    return Err(StateErr::NoItem { 
-                        ty: "Group".to_string(), 
-                        name: group 
+                    return Err(StateErr::NoItem {
+                        ty: "Group".to_string(),
+                        name: group,
                     });
                 }
             }
@@ -1530,18 +1513,22 @@ impl CmdProcessor {
     }
 
     fn find_group(&mut self, name: String) -> StateResult<&mut GroupRepr> {
-        self.engine_state.groups.get_mut(&name)
-            .ok_or(StateErr::NoItem { 
-                ty: "Group".to_string(), 
-                name: name
+        self.engine_state
+            .groups
+            .get_mut(&name)
+            .ok_or(StateErr::NoItem {
+                ty: "Group".to_string(),
+                name: name,
             })
     }
 
     fn find_tc(&mut self, name: String) -> StateResult<&mut TempoRepr> {
-        self.engine_state.tempo_cons.get_mut(&name)
-            .ok_or(StateErr::NoItem { 
-                ty: "TempoContext".to_string(), 
-                name: name 
+        self.engine_state
+            .tempo_cons
+            .get_mut(&name)
+            .ok_or(StateErr::NoItem {
+                ty: "TempoContext".to_string(),
+                name: name,
             })
     }
 }
@@ -1559,7 +1546,7 @@ pub type CmdResult<Command> = Result<Command, CmdErr>;
 type StateResult<T> = Result<T, StateErr>;
 
 // generate identical enums for CmdErr and StateErr
-// and impl conversion from StateErr (internal) 
+// and impl conversion from StateErr (internal)
 // to CmdErr (user-facing)
 //
 macro_rules! cmd_errors {
@@ -1579,7 +1566,7 @@ macro_rules! cmd_errors {
                 $var { $( $arg: $type, )* },
             )*
         }
-        
+
         impl From<StateErr> for CmdErr {
             fn from(err: StateErr) -> Self {
                 match err {
@@ -1634,12 +1621,10 @@ impl fmt::Display for CmdErr {
             CmdErr::NoItem { ty, name } => {
                 write!(f, "Couldn't find {} '{}'", ty, name)
             }
-            CmdErr::NoVoice { name, group } => {
-                match group {
-                    Some(g_name) => write!(f, "Couldn't find Voice '{}' in Group '{}'", name, g_name),
-                    None => write!(f, "Couldn't find Voice '{}'", name),
-                }
-            }
+            CmdErr::NoVoice { name, group } => match group {
+                Some(g_name) => write!(f, "Couldn't find Voice '{}' in Group '{}'", name, g_name),
+                None => write!(f, "Couldn't find Voice '{}'", name),
+            },
         }
     }
 }
@@ -1709,12 +1694,24 @@ mod tests {
     fn load_errors() {
         let mut cp = processor(&["kick"]);
         assert!(matches!(err(&mut cp, "load nope"), CmdErr::NoItem { .. }));
-        assert!(matches!(err(&mut cp, "load kick -t x:1"), CmdErr::InvalidArg { .. }));
-        assert!(matches!(err(&mut cp, "load kick -t c:nope"), CmdErr::NoItem { .. }));
-        assert!(matches!(err(&mut cp, "load kick -t g:nope"), CmdErr::NoItem { .. }));
+        assert!(matches!(
+            err(&mut cp, "load kick -t x:1"),
+            CmdErr::InvalidArg { .. }
+        ));
+        assert!(matches!(
+            err(&mut cp, "load kick -t c:nope"),
+            CmdErr::NoItem { .. }
+        ));
+        assert!(matches!(
+            err(&mut cp, "load kick -t g:nope"),
+            CmdErr::NoItem { .. }
+        ));
         assert!(cp.engine_state.voices.is_empty());
         ok(&mut cp, "load kick");
-        assert!(matches!(err(&mut cp, "load kick"), CmdErr::AlreadyIs { .. }));
+        assert!(matches!(
+            err(&mut cp, "load kick"),
+            CmdErr::AlreadyIs { .. }
+        ));
     }
 
     #[test]
@@ -1810,7 +1807,14 @@ mod tests {
     }
 
     fn gv_idx(cp: &CmdProcessor, group: &str, voice: &str) -> usize {
-        cp.engine_state.groups.get(group).unwrap().voices.get(voice).unwrap().idx
+        cp.engine_state
+            .groups
+            .get(group)
+            .unwrap()
+            .voices
+            .get(voice)
+            .unwrap()
+            .idx
     }
 
     #[test]
@@ -1861,8 +1865,14 @@ mod tests {
             }
             _ => panic!("not a Velocity"),
         }
-        assert!(matches!(err(&mut cp, "velocity c"), CmdErr::MissingArg { .. }));
-        assert!(matches!(err(&mut cp, "velocity c x"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(
+            err(&mut cp, "velocity c"),
+            CmdErr::MissingArg { .. }
+        ));
+        assert!(matches!(
+            err(&mut cp, "velocity c x"),
+            CmdErr::InvalidArg { .. }
+        ));
     }
 
     #[test]
@@ -1892,9 +1902,18 @@ mod tests {
             }
             other => panic!("wrong error {:?}", other),
         }
-        assert!(matches!(err(&mut cp, "start -v nope.a"), CmdErr::NoItem { .. }));
-        assert!(matches!(err(&mut cp, "start -v a"), CmdErr::NoVoice { group: None, .. }));
-        assert!(matches!(err(&mut cp, "start -v g.a.b"), CmdErr::Formatting { .. }));
+        assert!(matches!(
+            err(&mut cp, "start -v nope.a"),
+            CmdErr::NoItem { .. }
+        ));
+        assert!(matches!(
+            err(&mut cp, "start -v a"),
+            CmdErr::NoVoice { group: None, .. }
+        ));
+        assert!(matches!(
+            err(&mut cp, "start -v g.a.b"),
+            CmdErr::Formatting { .. }
+        ));
     }
 
     #[test]
@@ -1904,7 +1923,14 @@ mod tests {
             Command::Seq(args) => assert_eq!(args.idx, Idx::GroupVoice(0, 1)),
             _ => panic!("not a Seq"),
         }
-        let gv = cp.engine_state.groups.get("g").unwrap().voices.get("b").unwrap();
+        let gv = cp
+            .engine_state
+            .groups
+            .get("g")
+            .unwrap()
+            .voices
+            .get("b")
+            .unwrap();
         assert_eq!(gv.processes.len(), 1);
     }
 
@@ -1942,7 +1968,14 @@ mod tests {
         // the TBD voice follows the group, i.e. the context
         let (_, follows, _) = args.vs_fs_ps[0];
         assert!(follows);
-        let a = cp.engine_state.groups.get("g").unwrap().voices.get("a").unwrap();
+        let a = cp
+            .engine_state
+            .groups
+            .get("g")
+            .unwrap()
+            .voices
+            .get("a")
+            .unwrap();
         assert_eq!(a.tempo.mode, TempoMode::Context);
         assert_eq!(a.tempo.idx, 1);
     }
@@ -1952,14 +1985,35 @@ mod tests {
         let mut cp = processor(&["a"]);
         ok(&mut cp, "tc clk b:120");
         ok(&mut cp, "load a");
-        assert!(matches!(err(&mut cp, "group g -t c:nope -v a"), CmdErr::NoItem { .. }));
-        assert!(matches!(err(&mut cp, "group g -t c"), CmdErr::MissingArg { .. }));
-        assert!(matches!(err(&mut cp, "group g -t x:1"), CmdErr::InvalidArg { .. }));
-        assert!(matches!(err(&mut cp, "group g -t b"), CmdErr::MissingArg { .. }));
-        assert!(matches!(err(&mut cp, "group g -t b:fast"), CmdErr::InvalidArg { .. }));
-        assert!(matches!(err(&mut cp, "group g -t"), CmdErr::MissingArg { .. }));
+        assert!(matches!(
+            err(&mut cp, "group g -t c:nope -v a"),
+            CmdErr::NoItem { .. }
+        ));
+        assert!(matches!(
+            err(&mut cp, "group g -t c"),
+            CmdErr::MissingArg { .. }
+        ));
+        assert!(matches!(
+            err(&mut cp, "group g -t x:1"),
+            CmdErr::InvalidArg { .. }
+        ));
+        assert!(matches!(
+            err(&mut cp, "group g -t b"),
+            CmdErr::MissingArg { .. }
+        ));
+        assert!(matches!(
+            err(&mut cp, "group g -t b:fast"),
+            CmdErr::InvalidArg { .. }
+        ));
+        assert!(matches!(
+            err(&mut cp, "group g -t"),
+            CmdErr::MissingArg { .. }
+        ));
         assert!(matches!(err(&mut cp, "group"), CmdErr::MissingArg { .. }));
-        assert!(matches!(err(&mut cp, "group g -x"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(
+            err(&mut cp, "group g -x"),
+            CmdErr::InvalidArg { .. }
+        ));
         assert!(cp.engine_state.groups.is_empty());
     }
 
@@ -2010,7 +2064,14 @@ mod tests {
         let (_, follows, p_ids) = &args.vs_fs_ps[0];
         assert!(*follows);
         assert!(p_ids.is_empty());
-        let a = cp.engine_state.groups.get("g").unwrap().voices.get("a").unwrap();
+        let a = cp
+            .engine_state
+            .groups
+            .get("g")
+            .unwrap()
+            .voices
+            .get("a")
+            .unwrap();
         let t = a.processes.get("seq").unwrap().tempo.as_ref().unwrap();
         assert_eq!(t.mode, TempoMode::Process);
     }
@@ -2023,7 +2084,14 @@ mod tests {
         let args = group_args(ok(&mut cp, "group g -v a"));
         let (_, _, p_ids) = &args.vs_fs_ps[0];
         assert_eq!(p_ids, &vec![0]);
-        let a = cp.engine_state.groups.get("g").unwrap().voices.get("a").unwrap();
+        let a = cp
+            .engine_state
+            .groups
+            .get("g")
+            .unwrap()
+            .voices
+            .get("a")
+            .unwrap();
         let t = a.processes.get("seq").unwrap().tempo.as_ref().unwrap();
         assert_eq!(t.mode, TempoMode::Group);
         assert!(!t.owned);
@@ -2145,9 +2213,18 @@ mod tests {
 
         assert!(matches!(err(&mut cp, "tc"), CmdErr::MissingArg { .. }));
         assert!(matches!(err(&mut cp, "tc c"), CmdErr::MissingArg { .. }));
-        assert!(matches!(err(&mut cp, "tc c b"), CmdErr::TempoFormatting { .. }));
-        assert!(matches!(err(&mut cp, "tc c x:1"), CmdErr::InvalidArg { .. }));
-        assert!(matches!(err(&mut cp, "tc c b:fast"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(
+            err(&mut cp, "tc c b"),
+            CmdErr::TempoFormatting { .. }
+        ));
+        assert!(matches!(
+            err(&mut cp, "tc c x:1"),
+            CmdErr::InvalidArg { .. }
+        ));
+        assert!(matches!(
+            err(&mut cp, "tc c b:fast"),
+            CmdErr::InvalidArg { .. }
+        ));
         assert_eq!(cp.engine_state.tempo_cons.len(), 2);
     }
 
@@ -2155,7 +2232,10 @@ mod tests {
     fn duplicate_tc_is_rejected() {
         let mut cp = processor(&[]);
         ok(&mut cp, "tc a b:120");
-        assert!(matches!(err(&mut cp, "tc a b:90"), CmdErr::AlreadyIs { .. }));
+        assert!(matches!(
+            err(&mut cp, "tc a b:90"),
+            CmdErr::AlreadyIs { .. }
+        ));
         let a = cp.engine_state.tempo_cons.get("a").unwrap();
         assert_eq!(a.interval, 120.0);
         assert_eq!(cp.engine_state.tempo_cons.len(), 1);
@@ -2170,12 +2250,22 @@ mod tests {
     fn duplicate_group_is_rejected() {
         let mut cp = loaded(&["a", "b", "c"]);
         ok(&mut cp, "group g -v a");
-        assert!(matches!(err(&mut cp, "group g -v b"), CmdErr::AlreadyIs { .. }));
+        assert!(matches!(
+            err(&mut cp, "group g -v b"),
+            CmdErr::AlreadyIs { .. }
+        ));
         // b wasn't consumed
         assert_eq!(v_idx(&cp, "b"), 0);
         assert_eq!(v_idx(&cp, "c"), 1);
         assert_eq!(cp.engine_state.groups.len(), 1);
-        assert!(cp.engine_state.groups.get("g").unwrap().voices.contains_key("a"));
+        assert!(
+            cp.engine_state
+                .groups
+                .get("g")
+                .unwrap()
+                .voices
+                .contains_key("a")
+        );
 
         ok(&mut cp, "group h -v b");
         assert_eq!(cp.engine_state.groups.get("h").unwrap().idx, 1);
@@ -2236,9 +2326,18 @@ mod seq_tests {
         let args = seq_ok("seq kick -t v -s 0");
         assert!(!args.tempo.owned);
 
-        assert!(matches!(seq_err("seq kick -t x:1 -s 0"), CmdErr::InvalidArg { .. }));
-        assert!(matches!(seq_err("seq kick -t b:fast -s 0"), CmdErr::InvalidArg { .. }));
-        assert!(matches!(seq_err("seq kick -t b -s 0"), CmdErr::TempoFormatting {}));
+        assert!(matches!(
+            seq_err("seq kick -t x:1 -s 0"),
+            CmdErr::InvalidArg { .. }
+        ));
+        assert!(matches!(
+            seq_err("seq kick -t b:fast -s 0"),
+            CmdErr::InvalidArg { .. }
+        ));
+        assert!(matches!(
+            seq_err("seq kick -t b -s 0"),
+            CmdErr::TempoFormatting {}
+        ));
     }
 
     #[test]
@@ -2252,20 +2351,32 @@ mod seq_tests {
         let args = seq_ok("seq kick -s 0");
         assert_eq!(args.period, 4);
 
-        assert!(matches!(seq_err("seq kick -p x -s 0"), CmdErr::InvalidArg { .. }));
-        assert!(matches!(seq_err("seq kick -s 0,x"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(
+            seq_err("seq kick -p x -s 0"),
+            CmdErr::InvalidArg { .. }
+        ));
+        assert!(matches!(
+            seq_err("seq kick -s 0,x"),
+            CmdErr::InvalidArg { .. }
+        ));
         assert!(matches!(seq_err("seq kick -s"), CmdErr::MissingArg { .. }));
     }
 
     #[test]
     fn seq_unknown_flag_and_voice() {
-        assert!(matches!(seq_err("seq kick -s 0 -z"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(
+            seq_err("seq kick -s 0 -z"),
+            CmdErr::InvalidArg { .. }
+        ));
         assert!(matches!(seq_err("seq snare -s 0"), CmdErr::NoVoice { .. }));
         assert!(matches!(seq_err("seq"), CmdErr::MissingArg { .. }));
     }
     #[test]
     fn seq_requires_steps() {
-        assert!(matches!(seq_err("seq kick -t b:120"), CmdErr::MissingArg { .. }));
+        assert!(matches!(
+            seq_err("seq kick -t b:120"),
+            CmdErr::MissingArg { .. }
+        ));
         assert!(matches!(seq_err("seq kick"), CmdErr::MissingArg { .. }));
 
         // a rejected seq leaves the mirror untouched
@@ -2278,46 +2389,124 @@ mod seq_tests {
 
     #[test]
     fn seq_rejects_zero_period() {
-        assert!(matches!(seq_err("seq kick -p 0 -s 0"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(
+            seq_err("seq kick -p 0 -s 0"),
+            CmdErr::InvalidArg { .. }
+        ));
         assert_eq!(seq_ok("seq kick -p 1 -s 0").period, 1);
     }
     #[test]
     fn seq_chance_at_index() {
-        assert_eq!(seq_ok("seq kick -s 0,1,2 -c 2:50").chance, vec![100.0, 100.0, 50.0]);
-        assert_eq!(seq_ok("seq kick -s 0,1,2 -c 1:50").chance, vec![100.0, 50.0, 100.0]);
-        assert_eq!(seq_ok("seq kick -s 0,1,2 -c 0:50").chance, vec![50.0, 100.0, 100.0]);
-        assert_eq!(seq_ok("seq kick -s 0,1.5 -c 1.5:25").chance, vec![100.0, 25.0]);
-        assert!(matches!(seq_err("seq kick -s 0,1,2 -c 5:50"), CmdErr::Formatting { .. }));
-        assert!(matches!(seq_err("seq kick -s 0,1,2 -c x:50"), CmdErr::InvalidArg { .. }));
-        assert!(matches!(seq_err("seq kick -s 0,1,2 -c 1:x"), CmdErr::InvalidArg { .. }));
-        assert!(matches!(seq_err("seq kick -s 0,1,2 -c 1:2:3"), CmdErr::Formatting { .. }));
+        assert_eq!(
+            seq_ok("seq kick -s 0,1,2 -c 2:50").chance,
+            vec![100.0, 100.0, 50.0]
+        );
+        assert_eq!(
+            seq_ok("seq kick -s 0,1,2 -c 1:50").chance,
+            vec![100.0, 50.0, 100.0]
+        );
+        assert_eq!(
+            seq_ok("seq kick -s 0,1,2 -c 0:50").chance,
+            vec![50.0, 100.0, 100.0]
+        );
+        assert_eq!(
+            seq_ok("seq kick -s 0,1.5 -c 1.5:25").chance,
+            vec![100.0, 25.0]
+        );
+        assert!(matches!(
+            seq_err("seq kick -s 0,1,2 -c 5:50"),
+            CmdErr::Formatting { .. }
+        ));
+        assert!(matches!(
+            seq_err("seq kick -s 0,1,2 -c x:50"),
+            CmdErr::InvalidArg { .. }
+        ));
+        assert!(matches!(
+            seq_err("seq kick -s 0,1,2 -c 1:x"),
+            CmdErr::InvalidArg { .. }
+        ));
+        assert!(matches!(
+            seq_err("seq kick -s 0,1,2 -c 1:2:3"),
+            CmdErr::Formatting { .. }
+        ));
     }
 
     #[test]
     fn seq_chance_all_positional_and_default() {
-        assert_eq!(seq_ok("seq kick -s 0,1,2").chance, vec![100.0, 100.0, 100.0]);
-        assert_eq!(seq_ok("seq kick -s 0,1,2 -c a:30").chance, vec![30.0, 30.0, 30.0]);
-        assert_eq!(seq_ok("seq kick -s 0,1,2 -c 10,20").chance, vec![10.0, 20.0, 100.0]);
-        assert_eq!(seq_ok("seq kick -s 0,1,2 -c 10,_,30").chance, vec![10.0, 100.0, 30.0]);
+        assert_eq!(
+            seq_ok("seq kick -s 0,1,2").chance,
+            vec![100.0, 100.0, 100.0]
+        );
+        assert_eq!(
+            seq_ok("seq kick -s 0,1,2 -c a:30").chance,
+            vec![30.0, 30.0, 30.0]
+        );
+        assert_eq!(
+            seq_ok("seq kick -s 0,1,2 -c 10,20").chance,
+            vec![10.0, 20.0, 100.0]
+        );
+        assert_eq!(
+            seq_ok("seq kick -s 0,1,2 -c 10,_,30").chance,
+            vec![10.0, 100.0, 30.0]
+        );
         // extra values are ignored
-        assert_eq!(seq_ok("seq kick -s 0,1 -c 10,20,30").chance, vec![10.0, 20.0]);
-        assert!(matches!(seq_err("seq kick -s 0,1 -c x"), CmdErr::InvalidArg { .. }));
-        assert!(matches!(seq_err("seq kick -s 0,1 -c"), CmdErr::MissingArg { .. }));
+        assert_eq!(
+            seq_ok("seq kick -s 0,1 -c 10,20,30").chance,
+            vec![10.0, 20.0]
+        );
+        assert!(matches!(
+            seq_err("seq kick -s 0,1 -c x"),
+            CmdErr::InvalidArg { .. }
+        ));
+        assert!(matches!(
+            seq_err("seq kick -s 0,1 -c"),
+            CmdErr::MissingArg { .. }
+        ));
         // -c needs steps first
-        assert!(matches!(seq_err("seq kick -c 50 -s 0,1"), CmdErr::Formatting { .. }));
+        assert!(matches!(
+            seq_err("seq kick -c 50 -s 0,1"),
+            CmdErr::Formatting { .. }
+        ));
     }
     #[test]
     fn seq_chance_range() {
         let s = "seq kick -s 0,1,2,3 -c";
-        assert_eq!(seq_ok(&format!("{} 1-3:20", s)).chance, vec![100.0, 20.0, 20.0, 20.0]);
-        assert_eq!(seq_ok(&format!("{} 3-1:20", s)).chance, vec![100.0, 20.0, 20.0, 20.0]);
-        assert_eq!(seq_ok(&format!("{} 0-1:20", s)).chance, vec![20.0, 20.0, 100.0, 100.0]);
-        assert_eq!(seq_ok(&format!("{} 2-9:20", s)).chance, vec![100.0, 100.0, 20.0, 20.0]);
-        assert_eq!(seq_ok(&format!("{} 1-1:20", s)).chance, vec![100.0, 20.0, 100.0, 100.0]);
-        assert!(matches!(seq_err(&format!("{} 5-9:20", s)), CmdErr::Formatting { .. }));
-        assert!(matches!(seq_err(&format!("{} 1-x:20", s)), CmdErr::InvalidArg { .. }));
-        assert!(matches!(seq_err(&format!("{} 1-3", s)), CmdErr::Formatting { .. }));
-        assert!(matches!(seq_err(&format!("{} 1-2-3:20", s)), CmdErr::Formatting { .. }));
+        assert_eq!(
+            seq_ok(&format!("{} 1-3:20", s)).chance,
+            vec![100.0, 20.0, 20.0, 20.0]
+        );
+        assert_eq!(
+            seq_ok(&format!("{} 3-1:20", s)).chance,
+            vec![100.0, 20.0, 20.0, 20.0]
+        );
+        assert_eq!(
+            seq_ok(&format!("{} 0-1:20", s)).chance,
+            vec![20.0, 20.0, 100.0, 100.0]
+        );
+        assert_eq!(
+            seq_ok(&format!("{} 2-9:20", s)).chance,
+            vec![100.0, 100.0, 20.0, 20.0]
+        );
+        assert_eq!(
+            seq_ok(&format!("{} 1-1:20", s)).chance,
+            vec![100.0, 20.0, 100.0, 100.0]
+        );
+        assert!(matches!(
+            seq_err(&format!("{} 5-9:20", s)),
+            CmdErr::Formatting { .. }
+        ));
+        assert!(matches!(
+            seq_err(&format!("{} 1-x:20", s)),
+            CmdErr::InvalidArg { .. }
+        ));
+        assert!(matches!(
+            seq_err(&format!("{} 1-3", s)),
+            CmdErr::Formatting { .. }
+        ));
+        assert!(matches!(
+            seq_err(&format!("{} 1-2-3:20", s)),
+            CmdErr::Formatting { .. }
+        ));
     }
     #[test]
     fn seq_jitter_default_and_none() {
@@ -2357,19 +2546,46 @@ mod seq_tests {
         assert_eq!(j("2-1:5|10"), cat([none, v, v]));
         assert_eq!(j("0:5|10,2:5|10"), cat([v, none, v]));
 
-        assert!(matches!(seq_err("seq kick -s 0,1,2 -j 7:5|10"), CmdErr::Formatting { .. }));
-        assert!(matches!(seq_err("seq kick -s 0,1,2 -j 5-9:5|10"), CmdErr::Formatting { .. }));
-        assert!(matches!(seq_err("seq kick -s 0,1,2 -j x:5|10"), CmdErr::InvalidArg { .. }));
-        assert!(matches!(seq_err("seq kick -s 0,1,2 -j 1:2:3"), CmdErr::Formatting { .. }));
+        assert!(matches!(
+            seq_err("seq kick -s 0,1,2 -j 7:5|10"),
+            CmdErr::Formatting { .. }
+        ));
+        assert!(matches!(
+            seq_err("seq kick -s 0,1,2 -j 5-9:5|10"),
+            CmdErr::Formatting { .. }
+        ));
+        assert!(matches!(
+            seq_err("seq kick -s 0,1,2 -j x:5|10"),
+            CmdErr::InvalidArg { .. }
+        ));
+        assert!(matches!(
+            seq_err("seq kick -s 0,1,2 -j 1:2:3"),
+            CmdErr::Formatting { .. }
+        ));
     }
 
     #[test]
     fn seq_jitter_errors() {
-        assert!(matches!(seq_err("seq kick -s 0,1 -j"), CmdErr::MissingArg { .. }));
-        assert!(matches!(seq_err("seq kick -j 5|5 -s 0,1"), CmdErr::Formatting { .. }));
-        assert!(matches!(seq_err("seq kick -s 0,1 -j x"), CmdErr::InvalidArg { .. }));
-        assert!(matches!(seq_err("seq kick -s 0,1 -j 1|2|3"), CmdErr::Formatting { .. }));
-        assert!(matches!(seq_err("seq kick -s 0,1 -j 1-2-3"), CmdErr::Formatting { .. }));
+        assert!(matches!(
+            seq_err("seq kick -s 0,1 -j"),
+            CmdErr::MissingArg { .. }
+        ));
+        assert!(matches!(
+            seq_err("seq kick -j 5|5 -s 0,1"),
+            CmdErr::Formatting { .. }
+        ));
+        assert!(matches!(
+            seq_err("seq kick -s 0,1 -j x"),
+            CmdErr::InvalidArg { .. }
+        ));
+        assert!(matches!(
+            seq_err("seq kick -s 0,1 -j 1|2|3"),
+            CmdErr::Formatting { .. }
+        ));
+        assert!(matches!(
+            seq_err("seq kick -s 0,1 -j 1-2-3"),
+            CmdErr::Formatting { .. }
+        ));
     }
     fn proc_idx(cp: &mut CmdProcessor, p_name: &str) -> usize {
         let voice = cp.find_voice("kick".to_string()).unwrap();
@@ -2382,12 +2598,18 @@ mod seq_tests {
         for _ in 0..3 {
             assert!(seq(&mut cp, "seq kick -s 0").is_ok());
         }
-        assert_eq!(cp.find_voice("kick".to_string()).unwrap().processes.len(), 3);
+        assert_eq!(
+            cp.find_voice("kick".to_string()).unwrap().processes.len(),
+            3
+        );
         assert_eq!(proc_idx(&mut cp, "seq"), 0);
         assert_eq!(proc_idx(&mut cp, "seq1"), 1);
         assert_eq!(proc_idx(&mut cp, "seq2"), 2);
         // each owns a Process tempo
-        assert_eq!(cp.find_voice("kick".to_string()).unwrap().proc_tempi.len(), 3);
+        assert_eq!(
+            cp.find_voice("kick".to_string()).unwrap().proc_tempi.len(),
+            3
+        );
     }
 
     #[test]
@@ -2409,10 +2631,19 @@ mod seq_tests {
             _ => panic!("duplicate seq name should fail"),
         }
         // the failed seq didn't touch the mirror
-        assert_eq!(cp.find_voice("kick".to_string()).unwrap().processes.len(), 3);
-        assert_eq!(cp.find_voice("kick".to_string()).unwrap().proc_tempi.len(), 3);
+        assert_eq!(
+            cp.find_voice("kick".to_string()).unwrap().processes.len(),
+            3
+        );
+        assert_eq!(
+            cp.find_voice("kick".to_string()).unwrap().proc_tempi.len(),
+            3
+        );
 
-        assert!(matches!(seq_err("seq kick -s 0 -n"), CmdErr::MissingArg { .. }));
+        assert!(matches!(
+            seq_err("seq kick -s 0 -n"),
+            CmdErr::MissingArg { .. }
+        ));
     }
 
     #[test]
@@ -2427,6 +2658,9 @@ mod seq_tests {
     fn chance_range_with_unsorted_steps() {
         let args = seq_ok("seq kick -s 3,0 -c 2-5:40");
         assert_eq!(args.chance, vec![40.0, 100.0]);
-        assert!(matches!(seq_err("seq kick -s 3,0 -c 4-5:40"), CmdErr::Formatting { .. }));
+        assert!(matches!(
+            seq_err("seq kick -s 3,0 -c 4-5:40"),
+            CmdErr::Formatting { .. }
+        ));
     }
 }

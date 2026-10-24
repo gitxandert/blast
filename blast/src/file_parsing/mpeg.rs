@@ -1,7 +1,7 @@
+use super::decode_helpers::{DecodeError, DecodeResult};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read};
-use std::collections::HashMap;
-use super::decode_helpers::{DecodeResult, DecodeError};
 
 // iterate through frames by frame size
 pub fn parse(path: &str) -> DecodeResult<Vec<u8>> {
@@ -44,7 +44,7 @@ pub fn parse(path: &str) -> DecodeResult<Vec<u8>> {
             cur += 1;
         }
     }
-   
+
     // sort possible headers by frequency (most to least frequent)
     let mut vecs: Vec<(&usize, &Vec<usize>)> = possibles.iter().collect();
     vecs.sort_by(|a, b| {
@@ -52,7 +52,7 @@ pub fn parse(path: &str) -> DecodeResult<Vec<u8>> {
         let bl = b.1.len();
         bl.cmp(&al)
     });
-   
+
     // get a reference header to validate less common headers
     let mut i = 0;
     let refheader: Header = loop {
@@ -60,7 +60,7 @@ pub fn parse(path: &str) -> DecodeResult<Vec<u8>> {
         match parse_header(pos_ref) {
             Ok((v, l, p, br, sr, pd, cm)) => {
                 break Header::format(v, l, p, br, sr, pd, cm);
-            },
+            }
             Err(error) => eprintln!("{:?}", error),
         };
         i += 1;
@@ -81,7 +81,7 @@ pub fn parse(path: &str) -> DecodeResult<Vec<u8>> {
                                 true => 6,
                                 false => 4,
                             };
-                        
+
                             for index in indices {
                                 let mut frame_data: Vec<u8> = Vec::with_capacity(frame_len);
                                 let start = index + skip;
@@ -93,17 +93,17 @@ pub fn parse(path: &str) -> DecodeResult<Vec<u8>> {
                             }
 
                             valid += indices.len();
-                        },
+                        }
                         Err(error) => eprintln!("{:?}", error),
                     };
                 }
-            },
+            }
             Err(error) => eprintln!("{:?}", error),
         };
     }
 
     // sort frames by file position to push to data vec in order
-    frames.sort_by(|a,b| {
+    frames.sort_by(|a, b| {
         let a_fp = a.file_pos;
         let b_fp = b.file_pos;
         a_fp.cmp(&b_fp)
@@ -117,35 +117,43 @@ pub fn parse(path: &str) -> DecodeResult<Vec<u8>> {
     println!("{:?}", refheader);
     println!("Parsed {valid} valid headers");
     println!("Got {} bytes of data", data.len());
-            
+
     Ok(data)
 }
 
 #[derive(Debug)]
 struct Header {
-   version: f32,
-   layer: i32,
-   protected: bool,
-   bitrate: u32,
-   sr: f64,
-   padded: bool,
-   channel_mode: u8,
+    version: f32,
+    layer: i32,
+    protected: bool,
+    bitrate: u32,
+    sr: f64,
+    padded: bool,
+    channel_mode: u8,
 }
 
 impl Header {
-    fn format(version: u8, layer: u8, not_protected: u8, bitrate: u32, sr: f64, padded: u8, channel_mode: u8) -> Self {
+    fn format(
+        version: u8,
+        layer: u8,
+        not_protected: u8,
+        bitrate: u32,
+        sr: f64,
+        padded: u8,
+        channel_mode: u8,
+    ) -> Self {
         let version: f32 = match version {
             0x0 => 2.5f32,
             0x2 => 2.0f32,
             0x3 => 1.0f32,
-            _   => 0.0f32, // check if greater than 0
+            _ => 0.0f32, // check if greater than 0
         };
 
         let layer: i32 = match layer {
             0x1 => 3,
             0x2 => 2,
             0x3 => 1,
-            _   => 0, // check if greater than 0
+            _ => 0, // check if greater than 0
         };
 
         let protected: bool = match not_protected {
@@ -165,20 +173,29 @@ impl Header {
             bitrate,
             sr,
             padded,
-            channel_mode
+            channel_mode,
         }
     }
 
     fn barf(&self) -> (f32, i32, bool, u32, f64, bool, u8) {
-            (self.version, self.layer, self.protected, self.bitrate, self.sr, self.padded, self.channel_mode)
+        (
+            self.version,
+            self.layer,
+            self.protected,
+            self.bitrate,
+            self.sr,
+            self.padded,
+            self.channel_mode,
+        )
     }
 
     fn match_ref(&self, other: &Header) -> bool {
         if self.version == other.version
-        && self.layer == other.layer
-        && self.sr == other.sr
-        && self.channel_mode == other.channel_mode
-        && self.protected == other.protected {
+            && self.layer == other.layer
+            && self.sr == other.sr
+            && self.channel_mode == other.channel_mode
+            && self.protected == other.protected
+        {
             return true;
         } else {
             return false;
@@ -188,7 +205,7 @@ impl Header {
     // returns frame length in bytes
     fn compute_frame_len(&self) -> DecodeResult<usize> {
         let (_, layer, protected, br, sr, padded, _) = self.barf();
-   
+
         let br: f64 = br as f64 * 1000f64;
         let frame_len: f64 = match layer {
             3 => 144f64 * br as f64 / sr,
@@ -198,7 +215,9 @@ impl Header {
         };
 
         if frame_len < 20f64 {
-            return Err(DecodeError::InvalidData(String::from("Frame length too small")));
+            return Err(DecodeError::InvalidData(String::from(
+                "Frame length too small",
+            )));
         }
 
         let crc = match protected {
@@ -207,14 +226,14 @@ impl Header {
         };
 
         let padding = match padded {
-            true  => 1,
+            true => 1,
             false => 0,
         };
 
         // subtract the header and CRC
         Ok(frame_len as usize - crc + padding)
     }
-}// end impl Header
+} // end impl Header
 
 // store file position and data while processing valid headers
 struct Frame {
@@ -235,21 +254,21 @@ impl Frame {
 }
 
 static BITRATES: [[u32; 5]; 15] = [
-    [32,	32,	  32,	  32,	  8],
-    [64,	48,	  40,	  48,	  16],
-    [96,	56,	  48,	  56,	  24],
-    [128,	64,	  56,	  64,	  32],
-    [160,	80,	  64,	  80,	  40],
-    [192,	96,	  80,	  96,	  48],
-    [224,	112,	96,	  112,	56],
-    [256,	128,	112,	128,	64],
-    [288,	160,	128,	144,	80],
-    [320,	192,	160,	160,	96],
-    [352,	224,	192,	176,	112],
-    [384,	256,	224,	192,	128],
-    [416,	320,	256,	224,	144],
-    [448,	384,	320,	256,	160],
-    [0,   0,    0,    0,    0,],
+    [32, 32, 32, 32, 8],
+    [64, 48, 40, 48, 16],
+    [96, 56, 48, 56, 24],
+    [128, 64, 56, 64, 32],
+    [160, 80, 64, 80, 40],
+    [192, 96, 80, 96, 48],
+    [224, 112, 96, 112, 56],
+    [256, 128, 112, 128, 64],
+    [288, 160, 128, 144, 80],
+    [320, 192, 160, 160, 96],
+    [352, 224, 192, 176, 112],
+    [384, 256, 224, 192, 128],
+    [416, 320, 256, 224, 144],
+    [448, 384, 320, 256, 160],
+    [0, 0, 0, 0, 0],
 ];
 
 fn match_bitrate(row: u8, v: &u8, l: &u8) -> u32 {
@@ -259,7 +278,7 @@ fn match_bitrate(row: u8, v: &u8, l: &u8) -> u32 {
         0xE => 1,
         0xD => 2,
         0xB => 3,
-        _   => 4,
+        _ => 4,
     };
 
     BITRATES[row as usize][col]
@@ -270,7 +289,7 @@ fn match_sr(ffgh: &u8, v_id: &u8) -> f64 {
         0x3 => 32000f64,
         0x2 => 16000f64,
         0x0 => 8000f64,
-        _   => 0f64,
+        _ => 0f64,
     };
 
     let ff = ffgh >> 2;
@@ -278,7 +297,7 @@ fn match_sr(ffgh: &u8, v_id: &u8) -> f64 {
         0x0 => base * 1.378125f64,
         0x1 => base * 1.5f64,
         0x2 => base,
-        _   => 0f64,
+        _ => 0f64,
     };
 
     sr
@@ -301,8 +320,7 @@ fn skiparound(reader: &mut Vec<u8>, cur: &mut usize) {
                 *cur += input.parse::<usize>().unwrap();
             }
             println!("Val at {}: {:#X}", cur, reader[*cur]);
-        }
-        else {
+        } else {
             if input == "q" {
                 break;
             } else if input == "n" {
@@ -339,7 +357,7 @@ fn skiparound(reader: &mut Vec<u8>, cur: &mut usize) {
                         *cur += 1;
                         count += 1;
                     }
-                }                   
+                }
                 println!("Skipped ahead {count} times");
             }
             println!("Val at {}: {:#X}", cur, reader[*cur]);
@@ -368,13 +386,17 @@ fn parse_header(bytes: &usize) -> DecodeResult<(u8, u8, u8, u32, f64, u8, u8)> {
     match version {
         0x0 => print!("2.5\n"),
         0x1 => {
-            return Err(DecodeError::UnsupportedFormat(String::from("Unsupported audio version")));
-        },
+            return Err(DecodeError::UnsupportedFormat(String::from(
+                "Unsupported audio version",
+            )));
+        }
         0x2 => print!("2\n"),
         0x3 => print!("1\n"),
-        _   => {
-            return Err(DecodeError::InvalidData(String::from("Invalid audio version id")));
-        },
+        _ => {
+            return Err(DecodeError::InvalidData(String::from(
+                "Invalid audio version id",
+            )));
+        }
     };
 
     // CC
@@ -383,30 +405,34 @@ fn parse_header(bytes: &usize) -> DecodeResult<(u8, u8, u8, u32, f64, u8, u8)> {
     // 10 - Layer II
     // 11 - Layer I
     let layer: u8 = (bccd >> 1) & 0x3;
-    
+
     print!("Layer ");
     match layer {
         0x0 => {
-            return Err(DecodeError::UnsupportedFormat(String::from("Cannot parse reserved layer")))
-        },
+            return Err(DecodeError::UnsupportedFormat(String::from(
+                "Cannot parse reserved layer",
+            )));
+        }
         0x1 => print!("III\n"),
         0x2 => print!("II\n"),
         0x3 => print!("I\n"),
-        _   => {
-            return Err(DecodeError::InvalidData(String::from("Invalid layer description")))
-        },
+        _ => {
+            return Err(DecodeError::InvalidData(String::from(
+                "Invalid layer description",
+            )));
+        }
     };
 
     // D
     // (16) = protection bit
     // if 0, check for 16bit CRC after header
     let not_protected: u8 = bccd & 0x1;
-    if not_protected == 1{
+    if not_protected == 1 {
         println!("Not protected");
     } else {
         println!("Protected");
     }
-    
+
     let eeee_ffgh = (bytes >> 8) as u8;
     // EEEE
     // (15,12) = bitrate index
@@ -416,7 +442,9 @@ fn parse_header(bytes: &usize) -> DecodeResult<(u8, u8, u8, u32, f64, u8, u8)> {
     let eeee = eeee_ffgh >> 4;
     let bitrate: u32;
     if eeee == 0 || eeee == 0xF {
-        return Err(DecodeError::UnsupportedFormat(String::from("This application does not support 'free' or 'bad' bitrates")));
+        return Err(DecodeError::UnsupportedFormat(String::from(
+            "This application does not support 'free' or 'bad' bitrates",
+        )));
     } else {
         bitrate = match_bitrate(eeee - 1, &version, &layer);
         println!("Bitrate: {bitrate}");
@@ -428,7 +456,9 @@ fn parse_header(bytes: &usize) -> DecodeResult<(u8, u8, u8, u32, f64, u8, u8)> {
     let ffgh = eeee_ffgh & 0x0F;
     let sr: f64 = match_sr(&ffgh, &version);
     if sr == 0f64 {
-        return Err(DecodeError::InvalidData(String::from("Sample rate cannot be zero")));
+        return Err(DecodeError::InvalidData(String::from(
+            "Sample rate cannot be zero",
+        )));
     }
     println!("Sample rate: {sr}");
 
@@ -455,16 +485,18 @@ fn parse_header(bytes: &usize) -> DecodeResult<(u8, u8, u8, u32, f64, u8, u8)> {
         0x1 => println!("Joint stereo"),
         0x2 => println!("Dual channel (stereo)"),
         0x3 => println!("Single channel (mono)"),
-        _   => {
-            return Err(DecodeError::InvalidData(String::from("Invalid channel mode")));
-        },
+        _ => {
+            return Err(DecodeError::InvalidData(String::from(
+                "Invalid channel mode",
+            )));
+        }
     };
     // J
     // (5,4) = mode extension (only if channel_mode = joint stereo)
     // let mode_ext = IIJJ & 0x3;
 
     // bits 3-0 are not pertinent
-   
+
     println!("");
     Ok((
         version,

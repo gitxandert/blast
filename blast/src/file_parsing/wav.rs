@@ -1,6 +1,8 @@
+use super::decode_helpers::{
+    AudioFile, DecodeError, DecodeResult, file_stem, float_to_i16, pcm_to_i16,
+};
 use std::fs::File;
 use std::io::Read;
-use super::decode_helpers::{AudioFile, DecodeError, DecodeResult, pcm_to_i16, float_to_i16, file_stem};
 
 // format codes
 #[repr(u16)]
@@ -39,7 +41,12 @@ pub fn read_id(vec: &mut Vec<u8>, start: &mut usize, end: &mut usize) -> DecodeR
     Ok(id)
 }
 
-fn parse_bytes(bytes: &mut Vec<u8>, start: &mut usize, end: &mut usize, inc: usize) -> DecodeResult<u32> {
+fn parse_bytes(
+    bytes: &mut Vec<u8>,
+    start: &mut usize,
+    end: &mut usize,
+    inc: usize,
+) -> DecodeResult<u32> {
     let mut value: u32 = 0;
 
     *end += inc;
@@ -51,7 +58,7 @@ fn parse_bytes(bytes: &mut Vec<u8>, start: &mut usize, end: &mut usize, inc: usi
             Some(val) => *val,
             None => return Err(DecodeError::UnexpectedEof),
         };
-    
+
         value += (b as u32) << shift;
 
         shift += 8;
@@ -67,7 +74,7 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     let mut reader = Vec::new();
     f.read_to_end(&mut reader)?;
 
-    let mut start: usize= 0;
+    let mut start: usize = 0;
     let mut end: usize = 0;
 
     // RIFF
@@ -129,19 +136,26 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     };
 
     if fmt_size < 16 {
-        return Err(DecodeError::InvalidData(format!("fmt chunk too small ({fmt_size} bytes)")));
+        return Err(DecodeError::InvalidData(format!(
+            "fmt chunk too small ({fmt_size} bytes)"
+        )));
     }
 
     start = fmt_start;
     end = fmt_start;
 
-    let Some(fmt_tag) = FormatCode::from_u16(parse_bytes(&mut reader, &mut start, &mut end, 2)?.try_into().unwrap())
-    else {
-        return Err(DecodeError::UnsupportedFormat(String::from("Unrecognized format tag")));
+    let Some(fmt_tag) = FormatCode::from_u16(
+        parse_bytes(&mut reader, &mut start, &mut end, 2)?
+            .try_into()
+            .unwrap(),
+    ) else {
+        return Err(DecodeError::UnsupportedFormat(String::from(
+            "Unrecognized format tag",
+        )));
     };
-    
+
     let num_channels: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
-    
+
     let sample_rate: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
 
     let _data_rate: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
@@ -171,7 +185,11 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
             if fmt_tag == FormatCode::WaveFormatExtensible {
                 sample_fmt = match FormatCode::from_u16(old_fmt as u16) {
                     Some(code) => code,
-                    None => return Err(DecodeError::UnsupportedFormat(format!("Unrecognized SubFormat {old_fmt:#06x}"))),
+                    None => {
+                        return Err(DecodeError::UnsupportedFormat(format!(
+                            "Unrecognized SubFormat {old_fmt:#06x}"
+                        )));
+                    }
                 };
                 if valid_bits > 0 {
                     file_bits = valid_bits;
@@ -206,7 +224,14 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
 
     let file_name = file_stem(path)?;
 
-    Ok(AudioFile::new(file_name, "wav", sample_rate, num_channels, file_bits, samples))
+    Ok(AudioFile::new(
+        file_name,
+        "wav",
+        sample_rate,
+        num_channels,
+        file_bits,
+        samples,
+    ))
 }
 
 #[cfg(test)]
@@ -253,7 +278,9 @@ mod tests {
         v.extend_from_slice(&3u32.to_le_bytes());
         // KSDATAFORMAT_SUBTYPE GUID: first 2 bytes are the format tag
         v.extend_from_slice(&sub_tag.to_le_bytes());
-        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71]);
+        v.extend_from_slice(&[
+            0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71,
+        ]);
         v
     }
 
@@ -262,7 +289,8 @@ mod tests {
     }
 
     fn parse_temp(name: &str, bytes: &[u8]) -> DecodeResult<AudioFile> {
-        let path = std::env::temp_dir().join(format!("blast_wav_{}_{}.wav", name, std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("blast_wav_{}_{}.wav", name, std::process::id()));
         std::fs::write(&path, bytes).unwrap();
         let result = parse(path.to_str().unwrap());
         std::fs::remove_file(&path).unwrap();
@@ -273,7 +301,10 @@ mod tests {
 
     #[test]
     fn parses_pcm_wav() {
-        let bytes = riff(&[chunk(b"fmt ", &fmt_body(1, 2, 48000, 16)), chunk(b"data", &i16_data(&SAMPLES))]);
+        let bytes = riff(&[
+            chunk(b"fmt ", &fmt_body(1, 2, 48000, 16)),
+            chunk(b"data", &i16_data(&SAMPLES)),
+        ]);
         let file = parse_temp("pcm", &bytes).unwrap();
         assert_eq!(file.sample_rate, 48000);
         assert_eq!(file.num_channels, 2);
@@ -285,7 +316,10 @@ mod tests {
 
     #[test]
     fn parses_extensible_wav() {
-        let bytes = riff(&[chunk(b"fmt ", &fmt_ext_body(1, 2, 44100, 16, 16)), chunk(b"data", &i16_data(&SAMPLES))]);
+        let bytes = riff(&[
+            chunk(b"fmt ", &fmt_ext_body(1, 2, 44100, 16, 16)),
+            chunk(b"data", &i16_data(&SAMPLES)),
+        ]);
         let file = parse_temp("ext", &bytes).unwrap();
         assert_eq!(file.sample_rate, 44100);
         assert_eq!(file.num_channels, 2);
@@ -305,11 +339,17 @@ mod tests {
 
     #[test]
     fn truncated_file_is_eof() {
-        let bytes = riff(&[chunk(b"fmt ", &fmt_body(1, 2, 48000, 16)), chunk(b"data", &i16_data(&SAMPLES))]);
+        let bytes = riff(&[
+            chunk(b"fmt ", &fmt_body(1, 2, 48000, 16)),
+            chunk(b"data", &i16_data(&SAMPLES)),
+        ]);
         // a cut-off data chunk reads the whole frames that are there
         let cut = &bytes[..bytes.len() - 3];
         assert_eq!(parse_temp("trunc", cut).unwrap().samples, SAMPLES[..4]);
-        assert!(matches!(parse_temp("trunc_hdr", &bytes[..20]), Err(DecodeError::UnexpectedEof)));
+        assert!(matches!(
+            parse_temp("trunc_hdr", &bytes[..20]),
+            Err(DecodeError::UnexpectedEof)
+        ));
     }
 
     // full-scale positive, full-scale negative, zero
@@ -328,21 +368,31 @@ mod tests {
 
     #[test]
     fn converts_24_bit() {
-        let file = depth_file("s24", fmt_body(1, 1, 48000, 24), &[0xFF, 0xFF, 0x7F, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00]);
+        let file = depth_file(
+            "s24",
+            fmt_body(1, 1, 48000, 24),
+            &[0xFF, 0xFF, 0x7F, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00],
+        );
         assert_eq!(file.samples, EXPECTED.to_vec());
         assert_eq!(file.bits_per_sample, 24);
     }
 
     #[test]
     fn converts_32_bit_int() {
-        let data: Vec<u8> = [i32::MAX, i32::MIN, 0].iter().flat_map(|s| s.to_le_bytes()).collect();
+        let data: Vec<u8> = [i32::MAX, i32::MIN, 0]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
         let file = depth_file("s32", fmt_body(1, 1, 48000, 32), &data);
         assert_eq!(file.samples, EXPECTED.to_vec());
     }
 
     #[test]
     fn converts_32_bit_float() {
-        let data: Vec<u8> = [1.0f32, -1.0, 0.0].iter().flat_map(|s| s.to_le_bytes()).collect();
+        let data: Vec<u8> = [1.0f32, -1.0, 0.0]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
         let file = depth_file("f32", fmt_body(3, 1, 48000, 32), &data);
         assert_eq!(file.samples, EXPECTED.to_vec());
     }
@@ -354,21 +404,48 @@ mod tests {
         assert_eq!(file.samples, EXPECTED.to_vec());
         assert_eq!(file.bits_per_sample, 20);
 
-        let data: Vec<u8> = [1.0f32, -1.0, 0.0].iter().flat_map(|s| s.to_le_bytes()).collect();
+        let data: Vec<u8> = [1.0f32, -1.0, 0.0]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
         let file = depth_file("extf32", fmt_ext_body(3, 1, 48000, 32, 32), &data);
         assert_eq!(file.samples, EXPECTED.to_vec());
     }
 
     #[test]
     fn unsupported_formats_are_errors() {
-        let bytes = riff(&[chunk(b"fmt ", &fmt_body(6, 1, 8000, 8)), chunk(b"data", &[0xD5])]);
-        assert!(matches!(parse_temp("alaw", &bytes), Err(DecodeError::UnsupportedFormat(_))));
-        let bytes = riff(&[chunk(b"fmt ", &fmt_ext_body(7, 1, 8000, 8, 8)), chunk(b"data", &[0xFF])]);
-        assert!(matches!(parse_temp("ext_mulaw", &bytes), Err(DecodeError::UnsupportedFormat(_))));
-        let bytes = riff(&[chunk(b"fmt ", &fmt_body(3, 1, 48000, 16)), chunk(b"data", &[0, 0])]);
-        assert!(matches!(parse_temp("f16", &bytes), Err(DecodeError::UnsupportedFormat(_))));
-        let bytes = riff(&[chunk(b"fmt ", &fmt_body(0x55, 1, 48000, 16)), chunk(b"data", &[0, 0])]);
-        assert!(matches!(parse_temp("mp3tag", &bytes), Err(DecodeError::UnsupportedFormat(_))));
+        let bytes = riff(&[
+            chunk(b"fmt ", &fmt_body(6, 1, 8000, 8)),
+            chunk(b"data", &[0xD5]),
+        ]);
+        assert!(matches!(
+            parse_temp("alaw", &bytes),
+            Err(DecodeError::UnsupportedFormat(_))
+        ));
+        let bytes = riff(&[
+            chunk(b"fmt ", &fmt_ext_body(7, 1, 8000, 8, 8)),
+            chunk(b"data", &[0xFF]),
+        ]);
+        assert!(matches!(
+            parse_temp("ext_mulaw", &bytes),
+            Err(DecodeError::UnsupportedFormat(_))
+        ));
+        let bytes = riff(&[
+            chunk(b"fmt ", &fmt_body(3, 1, 48000, 16)),
+            chunk(b"data", &[0, 0]),
+        ]);
+        assert!(matches!(
+            parse_temp("f16", &bytes),
+            Err(DecodeError::UnsupportedFormat(_))
+        ));
+        let bytes = riff(&[
+            chunk(b"fmt ", &fmt_body(0x55, 1, 48000, 16)),
+            chunk(b"data", &[0, 0]),
+        ]);
+        assert!(matches!(
+            parse_temp("mp3tag", &bytes),
+            Err(DecodeError::UnsupportedFormat(_))
+        ));
     }
 
     #[test]
@@ -378,7 +455,10 @@ mod tests {
             chunk(b"LIST", b"INFOISFT\x05\x00\x00\x00blast\x00"),
             chunk(b"data", &i16_data(&SAMPLES)),
         ]);
-        assert_eq!(parse_temp("list", &bytes).unwrap().samples, SAMPLES.to_vec());
+        assert_eq!(
+            parse_temp("list", &bytes).unwrap().samples,
+            SAMPLES.to_vec()
+        );
     }
 
     #[test]
@@ -398,7 +478,10 @@ mod tests {
 
     #[test]
     fn data_before_fmt() {
-        let bytes = riff(&[chunk(b"data", &i16_data(&SAMPLES)), chunk(b"fmt ", &fmt_body(1, 2, 44100, 16))]);
+        let bytes = riff(&[
+            chunk(b"data", &i16_data(&SAMPLES)),
+            chunk(b"fmt ", &fmt_body(1, 2, 44100, 16)),
+        ]);
         let file = parse_temp("datafirst", &bytes).unwrap();
         assert_eq!(file.sample_rate, 44100);
         assert_eq!(file.samples, SAMPLES.to_vec());
@@ -406,33 +489,66 @@ mod tests {
 
     #[test]
     fn wrong_magic_is_invalid() {
-        let mut bytes = riff(&[chunk(b"fmt ", &fmt_body(1, 2, 48000, 16)), chunk(b"data", &i16_data(&SAMPLES))]);
+        let mut bytes = riff(&[
+            chunk(b"fmt ", &fmt_body(1, 2, 48000, 16)),
+            chunk(b"data", &i16_data(&SAMPLES)),
+        ]);
         bytes[8..12].copy_from_slice(b"AVI ");
-        assert!(matches!(parse_temp("avi", &bytes), Err(DecodeError::InvalidData(_))));
+        assert!(matches!(
+            parse_temp("avi", &bytes),
+            Err(DecodeError::InvalidData(_))
+        ));
         bytes[0..4].copy_from_slice(b"FORM");
         bytes[8..12].copy_from_slice(b"WAVE");
-        assert!(matches!(parse_temp("form", &bytes), Err(DecodeError::InvalidData(_))));
+        assert!(matches!(
+            parse_temp("form", &bytes),
+            Err(DecodeError::InvalidData(_))
+        ));
     }
 
     #[test]
     fn missing_chunks_are_errors() {
-        let bytes = riff(&[chunk(b"fmt ", &fmt_body(1, 2, 48000, 16)), chunk(b"LIST", &[0; 4])]);
-        assert!(matches!(parse_temp("nodata", &bytes), Err(DecodeError::InvalidData(_))));
+        let bytes = riff(&[
+            chunk(b"fmt ", &fmt_body(1, 2, 48000, 16)),
+            chunk(b"LIST", &[0; 4]),
+        ]);
+        assert!(matches!(
+            parse_temp("nodata", &bytes),
+            Err(DecodeError::InvalidData(_))
+        ));
         let bytes = riff(&[chunk(b"data", &i16_data(&SAMPLES))]);
-        assert!(matches!(parse_temp("nofmt", &bytes), Err(DecodeError::InvalidData(_))));
-        let bytes = riff(&[chunk(b"fmt ", &[1, 0, 2, 0]), chunk(b"data", &i16_data(&SAMPLES))]);
-        assert!(matches!(parse_temp("shortfmt", &bytes), Err(DecodeError::InvalidData(_))));
+        assert!(matches!(
+            parse_temp("nofmt", &bytes),
+            Err(DecodeError::InvalidData(_))
+        ));
+        let bytes = riff(&[
+            chunk(b"fmt ", &[1, 0, 2, 0]),
+            chunk(b"data", &i16_data(&SAMPLES)),
+        ]);
+        assert!(matches!(
+            parse_temp("shortfmt", &bytes),
+            Err(DecodeError::InvalidData(_))
+        ));
     }
 
     #[test]
     fn parse_bytes_little_endian() {
         let mut bytes = vec![0x34, 0x12, 0x78, 0x56, 0x34, 0x12, 0xFF];
         let (mut start, mut end) = (0, 0);
-        assert_eq!(parse_bytes(&mut bytes, &mut start, &mut end, 2).unwrap(), 0x1234);
+        assert_eq!(
+            parse_bytes(&mut bytes, &mut start, &mut end, 2).unwrap(),
+            0x1234
+        );
         assert_eq!((start, end), (2, 2));
-        assert_eq!(parse_bytes(&mut bytes, &mut start, &mut end, 4).unwrap(), 0x12345678);
+        assert_eq!(
+            parse_bytes(&mut bytes, &mut start, &mut end, 4).unwrap(),
+            0x12345678
+        );
         assert_eq!((start, end), (6, 6));
-        assert!(matches!(parse_bytes(&mut bytes, &mut start, &mut end, 2), Err(DecodeError::UnexpectedEof)));
+        assert!(matches!(
+            parse_bytes(&mut bytes, &mut start, &mut end, 2),
+            Err(DecodeError::UnexpectedEof)
+        ));
     }
 
     #[test]
@@ -440,7 +556,9 @@ mod tests {
         // assets/ is gitignored, so skip on checkouts without it
         for name in ["kick", "rim1", "shaker", "snare"] {
             let path = format!("{}/assets/{}.wav", env!("CARGO_MANIFEST_DIR"), name);
-            if !std::path::Path::new(&path).exists() { continue; }
+            if !std::path::Path::new(&path).exists() {
+                continue;
+            }
             let file = parse(&path).unwrap();
             assert_eq!(file.file_name, name);
             assert_eq!(file.sample_rate, 48000);
@@ -452,11 +570,17 @@ mod tests {
 
     #[test]
     fn streamed_data_size_reads_to_end() {
-        let mut bytes = riff(&[chunk(b"fmt ", &fmt_body(1, 2, 48000, 16)), chunk(b"data", &i16_data(&SAMPLES))]);
+        let mut bytes = riff(&[
+            chunk(b"fmt ", &fmt_body(1, 2, 48000, 16)),
+            chunk(b"data", &i16_data(&SAMPLES)),
+        ]);
         // the data size field sits just before the samples
         let at = bytes.len() - SAMPLES.len() * 2 - 4;
         bytes[at..at + 4].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
-        assert_eq!(parse_temp("streamed", &bytes).unwrap().samples, SAMPLES.to_vec());
+        assert_eq!(
+            parse_temp("streamed", &bytes).unwrap().samples,
+            SAMPLES.to_vec()
+        );
     }
 
     #[test]

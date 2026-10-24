@@ -3,12 +3,12 @@
 // drives Conductor::coordinate without ALSA by pointing fake
 // channel areas at an interleaved Vec<i16>
 
-use std::{ffi::c_void, collections::HashMap};
+use std::{collections::HashMap, ffi::c_void};
 
 use alsa_sys::snd_pcm_channel_area_t;
 
-use crate::audio_processing::engine::Conductor;
 use crate::audio_processing::commands::{CmdProcessor, EngineState};
+use crate::audio_processing::engine::Conductor;
 use crate::file_parsing::decode_helpers::AudioFile;
 
 // interleaved i16 buffer of frames * channels, like ALSA's mmap areas

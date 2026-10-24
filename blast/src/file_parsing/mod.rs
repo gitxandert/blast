@@ -3,9 +3,9 @@ pub mod decode_helpers;
 pub mod mpeg;
 pub mod wav;
 
-use std::fs;
-use std::collections::HashMap;
 use decode_helpers::{AudioFile, DecodeError, DecodeResult};
+use std::collections::HashMap;
+use std::fs;
 
 // parse every supported file in dir and agree on a sample rate
 // and channel count; returns (tracks by name, sample rate, num channels)
@@ -33,7 +33,9 @@ pub fn load_assets(dir: &str) -> DecodeResult<(HashMap<String, AudioFile>, u32, 
         };
 
         let ext: String = match path.rsplit_once(|b: char| b == '.') {
-            Some((before, after)) if !before.is_empty() && !after.is_empty() => after.to_ascii_lowercase(),
+            Some((before, after)) if !before.is_empty() && !after.is_empty() => {
+                after.to_ascii_lowercase()
+            }
             _ => String::new(),
         };
 
@@ -62,7 +64,10 @@ pub fn load_assets(dir: &str) -> DecodeResult<(HashMap<String, AudioFile>, u32, 
         }
 
         if tracks.contains_key(&track.file_name) {
-            println!("Error: multiple files with the same name {}, skipping '{}'", track.file_name, path);
+            println!(
+                "Error: multiple files with the same name {}, skipping '{}'",
+                track.file_name, path
+            );
             continue;
         }
 
@@ -71,20 +76,32 @@ pub fn load_assets(dir: &str) -> DecodeResult<(HashMap<String, AudioFile>, u32, 
     }
 
     // most common rate wins; ties go to the higher rate
-    let Some((mutual_rate, _)) = sample_rates.into_iter().max_by_key(|(rate, count)| (*count, *rate)) else {
-        return Err(DecodeError::InvalidData(format!("No playable audio files in '{dir}'")));
+    let Some((mutual_rate, _)) = sample_rates
+        .into_iter()
+        .max_by_key(|(rate, count)| (*count, *rate))
+    else {
+        return Err(DecodeError::InvalidData(format!(
+            "No playable audio files in '{dir}'"
+        )));
     };
 
     // no resampling yet, so files at other rates would play at the wrong pitch
     tracks.retain(|name, track| {
         if track.sample_rate != mutual_rate {
-            println!("Error: skipping '{}': sample rate {} differs from {}", name, track.sample_rate, mutual_rate);
+            println!(
+                "Error: skipping '{}': sample rate {} differs from {}",
+                name, track.sample_rate, mutual_rate
+            );
             return false;
         }
         true
     });
 
-    let num_channels: u32 = tracks.values().map(|track| track.num_channels).max().unwrap_or(2);
+    let num_channels: u32 = tracks
+        .values()
+        .map(|track| track.num_channels)
+        .max()
+        .unwrap_or(2);
 
     Ok((tracks, mutual_rate, num_channels))
 }
@@ -133,7 +150,8 @@ mod tests {
 
     // fresh directory filled with (file name, bytes)
     fn temp_assets(name: &str, files: &[(&str, Vec<u8>)]) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("blast_assets_{}_{}", name, std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("blast_assets_{}_{}", name, std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         for (file, bytes) in files {
@@ -156,15 +174,18 @@ mod tests {
 
     #[test]
     fn loads_all_supported_extensions() {
-        let dir = temp_assets("ext", &[
-            ("a.wav", wav_bytes(48000, 2, &[1, 2])),
-            ("b.aif", aiff_bytes(48000, 1, &[3])),
-            ("c.aiff", aiff_bytes(48000, 2, &[4, 5])),
-            ("d.AIF", aiff_bytes(48000, 1, &[6])),
-            ("e.WAV", wav_bytes(48000, 1, &[7])),
-            ("notes.txt", b"not audio".to_vec()),
-            ("noext", b"nothing".to_vec()),
-        ]);
+        let dir = temp_assets(
+            "ext",
+            &[
+                ("a.wav", wav_bytes(48000, 2, &[1, 2])),
+                ("b.aif", aiff_bytes(48000, 1, &[3])),
+                ("c.aiff", aiff_bytes(48000, 2, &[4, 5])),
+                ("d.AIF", aiff_bytes(48000, 1, &[6])),
+                ("e.WAV", wav_bytes(48000, 1, &[7])),
+                ("notes.txt", b"not audio".to_vec()),
+                ("noext", b"nothing".to_vec()),
+            ],
+        );
         let (tracks, rate, channels) = load(&dir).unwrap();
         assert_eq!(sorted_names(&tracks), vec!["a", "b", "c", "d", "e"]);
         assert_eq!(rate, 48000);
@@ -175,21 +196,27 @@ mod tests {
 
     #[test]
     fn unparseable_file_is_skipped() {
-        let dir = temp_assets("bad", &[
-            ("good.wav", wav_bytes(48000, 2, &[1, 2])),
-            ("bad.wav", b"RIFF\x04\x00\x00\x00WAVE".to_vec()),
-        ]);
+        let dir = temp_assets(
+            "bad",
+            &[
+                ("good.wav", wav_bytes(48000, 2, &[1, 2])),
+                ("bad.wav", b"RIFF\x04\x00\x00\x00WAVE".to_vec()),
+            ],
+        );
         let (tracks, _, _) = load(&dir).unwrap();
         assert_eq!(sorted_names(&tracks), vec!["good"]);
     }
 
     #[test]
     fn majority_rate_wins_and_others_are_excluded() {
-        let dir = temp_assets("rates", &[
-            ("a.wav", wav_bytes(44100, 1, &[1])),
-            ("b.wav", wav_bytes(44100, 1, &[2])),
-            ("c.wav", wav_bytes(48000, 2, &[3, 4])),
-        ]);
+        let dir = temp_assets(
+            "rates",
+            &[
+                ("a.wav", wav_bytes(44100, 1, &[1])),
+                ("b.wav", wav_bytes(44100, 1, &[2])),
+                ("c.wav", wav_bytes(48000, 2, &[3, 4])),
+            ],
+        );
         let (tracks, rate, channels) = load(&dir).unwrap();
         assert_eq!(rate, 44100);
         assert_eq!(sorted_names(&tracks), vec!["a", "b"]);
@@ -200,13 +227,16 @@ mod tests {
     #[test]
     fn duplicate_names_count_once() {
         // kick.aif sorts first and is kept; counting the other kicks would tip the vote to 44100
-        let dir = temp_assets("dups", &[
-            ("kick.aif", aiff_bytes(48000, 1, &[1])),
-            ("kick.aiff", aiff_bytes(44100, 1, &[2])),
-            ("kick.wav", wav_bytes(44100, 1, &[3])),
-            ("snare.wav", wav_bytes(44100, 1, &[4])),
-            ("hat.wav", wav_bytes(48000, 1, &[5])),
-        ]);
+        let dir = temp_assets(
+            "dups",
+            &[
+                ("kick.aif", aiff_bytes(48000, 1, &[1])),
+                ("kick.aiff", aiff_bytes(44100, 1, &[2])),
+                ("kick.wav", wav_bytes(44100, 1, &[3])),
+                ("snare.wav", wav_bytes(44100, 1, &[4])),
+                ("hat.wav", wav_bytes(48000, 1, &[5])),
+            ],
+        );
         let (tracks, rate, _) = load(&dir).unwrap();
         assert_eq!(rate, 48000);
         assert_eq!(sorted_names(&tracks), vec!["hat", "kick"]);
@@ -224,7 +254,10 @@ mod tests {
     #[test]
     fn missing_dir_is_io_error() {
         let dir = std::env::temp_dir().join(format!("blast_assets_missing_{}", std::process::id()));
-        assert!(matches!(load_assets(dir.to_str().unwrap()), Err(DecodeError::Io(_))));
+        assert!(matches!(
+            load_assets(dir.to_str().unwrap()),
+            Err(DecodeError::Io(_))
+        ));
     }
 
     #[test]
@@ -232,19 +265,31 @@ mod tests {
         // assets/ is gitignored, so skip on checkouts without it
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/");
         let names = ["kick", "rim1", "shaker", "snare"];
-        if !names.iter().all(|n| std::path::Path::new(&format!("{dir}{n}.wav")).exists()) { return; }
-        let (tracks, rate, channels) = load_assets(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/")).unwrap();
-        assert_eq!(sorted_names(&tracks), vec!["kick", "rim1", "shaker", "snare"]);
+        if !names
+            .iter()
+            .all(|n| std::path::Path::new(&format!("{dir}{n}.wav")).exists())
+        {
+            return;
+        }
+        let (tracks, rate, channels) =
+            load_assets(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/")).unwrap();
+        assert_eq!(
+            sorted_names(&tracks),
+            vec!["kick", "rim1", "shaker", "snare"]
+        );
         assert_eq!(rate, 48000);
         assert_eq!(channels, 2);
     }
 
     #[test]
     fn empty_tracks_are_skipped() {
-        let dir = temp_assets("no_audio", &[
-            ("a.wav", wav_bytes(48000, 2, &[1, 2])),
-            ("e.wav", wav_bytes(48000, 2, &[])),
-        ]);
+        let dir = temp_assets(
+            "no_audio",
+            &[
+                ("a.wav", wav_bytes(48000, 2, &[1, 2])),
+                ("e.wav", wav_bytes(48000, 2, &[])),
+            ],
+        );
         let (tracks, _, _) = load(&dir).unwrap();
         assert_eq!(sorted_names(&tracks), vec!["a"]);
     }
