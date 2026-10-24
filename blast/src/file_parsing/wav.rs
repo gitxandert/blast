@@ -1,5 +1,5 @@
 use super::decode_helpers::{
-    AudioFile, DecodeError, DecodeResult, file_stem, float_to_i16, pcm_to_i16,
+    AudioFile, DecodeError, DecodeResult, file_stem, float_to_i16, i16_to_f32, pcm_to_i16,
 };
 use std::fs::File;
 use std::io::Read;
@@ -221,6 +221,7 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
         FormatCode::WaveFormatIeeeFloat => float_to_i16(data, bits_per_sample, false)?,
         other => return Err(DecodeError::UnsupportedFormat(format!("{:?}", other))),
     };
+    let samples = i16_to_f32(&samples);
 
     let file_name = file_stem(path)?;
 
@@ -237,6 +238,7 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::file_parsing::decode_helpers::f32_to_i16;
 
     // little-endian chunk: id + size + body (+ pad byte if odd)
     fn chunk(id: &[u8; 4], body: &[u8]) -> Vec<u8> {
@@ -309,7 +311,7 @@ mod tests {
         assert_eq!(file.sample_rate, 48000);
         assert_eq!(file.num_channels, 2);
         assert_eq!(file.bits_per_sample, 16);
-        assert_eq!(file.samples, SAMPLES.to_vec());
+        assert_eq!(f32_to_i16(&file.samples), SAMPLES.to_vec());
         assert_eq!(file.format, "wav");
         assert!(file.file_name.starts_with("blast_wav_pcm_"));
     }
@@ -324,7 +326,7 @@ mod tests {
         assert_eq!(file.sample_rate, 44100);
         assert_eq!(file.num_channels, 2);
         assert_eq!(file.bits_per_sample, 16);
-        assert_eq!(file.samples, SAMPLES.to_vec());
+        assert_eq!(f32_to_i16(&file.samples), SAMPLES.to_vec());
     }
 
     #[test]
@@ -334,7 +336,7 @@ mod tests {
         let bytes = riff(&[chunk(b"fmt ", &fmt), chunk(b"data", &i16_data(&SAMPLES))]);
         let file = parse_temp("fmt18", &bytes).unwrap();
         assert_eq!(file.num_channels, 1);
-        assert_eq!(file.samples, SAMPLES.to_vec());
+        assert_eq!(f32_to_i16(&file.samples), SAMPLES.to_vec());
     }
 
     #[test]
@@ -345,7 +347,10 @@ mod tests {
         ]);
         // a cut-off data chunk reads the whole frames that are there
         let cut = &bytes[..bytes.len() - 3];
-        assert_eq!(parse_temp("trunc", cut).unwrap().samples, SAMPLES[..4]);
+        assert_eq!(
+            f32_to_i16(&parse_temp("trunc", cut).unwrap().samples),
+            SAMPLES[..4]
+        );
         assert!(matches!(
             parse_temp("trunc_hdr", &bytes[..20]),
             Err(DecodeError::UnexpectedEof)
@@ -362,7 +367,7 @@ mod tests {
     #[test]
     fn converts_8_bit_unsigned() {
         let file = depth_file("u8", fmt_body(1, 1, 48000, 8), &[0xFF, 0x00, 0x80]);
-        assert_eq!(file.samples, vec![32512, i16::MIN, 0]);
+        assert_eq!(f32_to_i16(&file.samples), vec![32512, i16::MIN, 0]);
         assert_eq!(file.bits_per_sample, 8);
     }
 
@@ -373,7 +378,7 @@ mod tests {
             fmt_body(1, 1, 48000, 24),
             &[0xFF, 0xFF, 0x7F, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00],
         );
-        assert_eq!(file.samples, EXPECTED.to_vec());
+        assert_eq!(f32_to_i16(&file.samples), EXPECTED.to_vec());
         assert_eq!(file.bits_per_sample, 24);
     }
 
@@ -384,7 +389,7 @@ mod tests {
             .flat_map(|s| s.to_le_bytes())
             .collect();
         let file = depth_file("s32", fmt_body(1, 1, 48000, 32), &data);
-        assert_eq!(file.samples, EXPECTED.to_vec());
+        assert_eq!(f32_to_i16(&file.samples), EXPECTED.to_vec());
     }
 
     #[test]
@@ -394,14 +399,14 @@ mod tests {
             .flat_map(|s| s.to_le_bytes())
             .collect();
         let file = depth_file("f32", fmt_body(3, 1, 48000, 32), &data);
-        assert_eq!(file.samples, EXPECTED.to_vec());
+        assert_eq!(f32_to_i16(&file.samples), EXPECTED.to_vec());
     }
 
     #[test]
     fn extensible_uses_sub_format_and_valid_bits() {
         let data = [0xF0, 0xFF, 0x7F, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00];
         let file = depth_file("ext24", fmt_ext_body(1, 1, 48000, 24, 20), &data);
-        assert_eq!(file.samples, EXPECTED.to_vec());
+        assert_eq!(f32_to_i16(&file.samples), EXPECTED.to_vec());
         assert_eq!(file.bits_per_sample, 20);
 
         let data: Vec<u8> = [1.0f32, -1.0, 0.0]
@@ -409,7 +414,7 @@ mod tests {
             .flat_map(|s| s.to_le_bytes())
             .collect();
         let file = depth_file("extf32", fmt_ext_body(3, 1, 48000, 32, 32), &data);
-        assert_eq!(file.samples, EXPECTED.to_vec());
+        assert_eq!(f32_to_i16(&file.samples), EXPECTED.to_vec());
     }
 
     #[test]
@@ -456,7 +461,7 @@ mod tests {
             chunk(b"data", &i16_data(&SAMPLES)),
         ]);
         assert_eq!(
-            parse_temp("list", &bytes).unwrap().samples,
+            f32_to_i16(&parse_temp("list", &bytes).unwrap().samples),
             SAMPLES.to_vec()
         );
     }
@@ -473,7 +478,7 @@ mod tests {
         assert_eq!(bytes.len(), 12 + (8 + 4) + (8 + 16) + (8 + 8) + (8 + 12));
         let file = parse_temp("pad", &bytes).unwrap();
         assert_eq!(file.num_channels, 1);
-        assert_eq!(file.samples, SAMPLES.to_vec());
+        assert_eq!(f32_to_i16(&file.samples), SAMPLES.to_vec());
     }
 
     #[test]
@@ -484,7 +489,7 @@ mod tests {
         ]);
         let file = parse_temp("datafirst", &bytes).unwrap();
         assert_eq!(file.sample_rate, 44100);
-        assert_eq!(file.samples, SAMPLES.to_vec());
+        assert_eq!(f32_to_i16(&file.samples), SAMPLES.to_vec());
     }
 
     #[test]
@@ -578,7 +583,7 @@ mod tests {
         let at = bytes.len() - SAMPLES.len() * 2 - 4;
         bytes[at..at + 4].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
         assert_eq!(
-            parse_temp("streamed", &bytes).unwrap().samples,
+            f32_to_i16(&parse_temp("streamed", &bytes).unwrap().samples),
             SAMPLES.to_vec()
         );
     }

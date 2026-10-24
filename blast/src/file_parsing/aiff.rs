@@ -1,4 +1,6 @@
-use super::decode_helpers::{AudioFile, DecodeError, DecodeResult, file_stem, pcm_to_i16};
+use super::decode_helpers::{
+    AudioFile, DecodeError, DecodeResult, file_stem, i16_to_f32, pcm_to_i16,
+};
 use std::fs::File;
 use std::io::Read;
 
@@ -217,7 +219,7 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     let data: &[u8] = &data[..data.len().min(frame_bytes)];
 
     // 8-bit AIFF is signed
-    let samples: Vec<i16> = pcm_to_i16(data, sample_size, true, false)?;
+    let samples = i16_to_f32(&pcm_to_i16(data, sample_size, true, false)?);
 
     let file_name = file_stem(path)?;
 
@@ -234,6 +236,7 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::file_parsing::decode_helpers::f32_to_i16;
 
     // big-endian chunk: id + size + body (+ pad byte if odd)
     fn chunk(id: &[u8; 4], body: &[u8]) -> Vec<u8> {
@@ -317,13 +320,13 @@ mod tests {
         assert_eq!(file.num_channels, 2);
         assert_eq!(file.bits_per_sample, 16);
         assert_eq!(file.format, "aiff");
-        assert_eq!(file.samples, samples.to_vec());
+        assert_eq!(f32_to_i16(&file.samples), samples.to_vec());
     }
 
     #[test]
     fn converts_8_bit_signed() {
         let file = depth_file("s8", 1, 8, &[0x7F, 0x80, 0x00]);
-        assert_eq!(file.samples, vec![32512, i16::MIN, 0]);
+        assert_eq!(f32_to_i16(&file.samples), vec![32512, i16::MIN, 0]);
     }
 
     #[test]
@@ -334,7 +337,7 @@ mod tests {
             24,
             &[0x7F, 0xFF, 0xFF, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00],
         );
-        assert_eq!(file.samples, EXPECTED.to_vec());
+        assert_eq!(f32_to_i16(&file.samples), EXPECTED.to_vec());
         assert_eq!(file.bits_per_sample, 24);
     }
 
@@ -345,7 +348,7 @@ mod tests {
             .flat_map(|s| s.to_be_bytes())
             .collect();
         let file = depth_file("s32", 1, 32, &data);
-        assert_eq!(file.samples, EXPECTED.to_vec());
+        assert_eq!(f32_to_i16(&file.samples), EXPECTED.to_vec());
     }
 
     #[test]
@@ -363,7 +366,7 @@ mod tests {
         );
         let file = parse_temp("mark", &bytes).unwrap();
         assert_eq!(file.sample_rate, 48000);
-        assert_eq!(file.samples, samples.to_vec());
+        assert_eq!(f32_to_i16(&file.samples), samples.to_vec());
     }
 
     #[test]
@@ -382,7 +385,7 @@ mod tests {
         );
         let file = parse_temp("ssndfirst", &bytes).unwrap();
         assert_eq!(file.num_channels, 1);
-        assert_eq!(file.samples, samples.to_vec());
+        assert_eq!(f32_to_i16(&file.samples), samples.to_vec());
     }
 
     #[test]
@@ -489,7 +492,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            parse_temp("offset", &bytes).unwrap().samples,
+            f32_to_i16(&parse_temp("offset", &bytes).unwrap().samples),
             vec![0x1234, i16::MIN]
         );
 
@@ -519,7 +522,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            parse_temp("frames", &bytes).unwrap().samples,
+            f32_to_i16(&parse_temp("frames", &bytes).unwrap().samples),
             vec![1, 2, 3, 4]
         );
         // more frames declared than present: read what is there
@@ -531,7 +534,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            parse_temp("frames_over", &bytes).unwrap().samples,
+            f32_to_i16(&parse_temp("frames_over", &bytes).unwrap().samples),
             samples.to_vec()
         );
     }

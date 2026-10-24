@@ -21,7 +21,8 @@ pub struct AudioFile {
     pub sample_rate: u32,
     pub num_channels: u32,
     pub bits_per_sample: u32,
-    pub samples: Vec<i16>,
+    /// Interleaved, full scale -1.0..1.0.
+    pub samples: Vec<f32>,
 }
 
 impl AudioFile {
@@ -31,7 +32,7 @@ impl AudioFile {
         sample_rate: u32,
         num_channels: u32,
         bits_per_sample: u32,
-        samples: Vec<i16>,
+        samples: Vec<f32>,
     ) -> Self {
         Self {
             file_name: file_name.to_string(),
@@ -42,6 +43,18 @@ impl AudioFile {
             samples,
         }
     }
+}
+
+/// Converts i16 PCM to f32 by dividing by full scale (32768), so the result
+/// lies in -1.0..1.0.
+pub fn i16_to_f32(samples: &[i16]) -> Vec<f32> {
+    samples.iter().map(|&s| f32::from(s) / 32768.0).collect()
+}
+
+// inverse of i16_to_f32, so tests can state expectations in i16
+#[cfg(test)]
+pub fn f32_to_i16(samples: &[f32]) -> Vec<i16> {
+    samples.iter().map(|&s| (s * 32768.0) as i16).collect()
 }
 
 // a track's name is its file name without directory or extension

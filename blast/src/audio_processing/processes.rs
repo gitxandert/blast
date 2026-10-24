@@ -190,7 +190,7 @@ mod tests {
         },
         commands::{CmdProcessor, Command, EngineState, Idx, SeqArgs, StartArgs, TempoRepr},
         engine::Conductor,
-        test_util::{conductor, render},
+        test_util::{conductor, pcm, render},
     };
     use crate::file_parsing::decode_helpers::AudioFile;
 
@@ -201,7 +201,7 @@ mod tests {
     fn kick() -> AudioFile {
         let mut samples = vec![1i16; LEN];
         samples[0] = -1;
-        AudioFile::new("kick", "wav", 48000, 1, 16, samples)
+        AudioFile::new("kick", "wav", 48000, 1, 16, pcm(&samples))
     }
 
     // runs each command through the parser and into the engine;

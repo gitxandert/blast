@@ -2277,7 +2277,7 @@ mod seq_tests {
     use super::*;
 
     fn processor() -> CmdProcessor {
-        let kick = AudioFile::new("kick", "wav", 48000, 1, 16, vec![0i16; 16]);
+        let kick = AudioFile::new("kick", "wav", 48000, 1, 16, vec![0.0; 16]);
         let mut cp = CmdProcessor::new(EngineState::new(vec![kick], 2));
         assert!(cp.parse("load kick".to_string()).is_ok());
         cp

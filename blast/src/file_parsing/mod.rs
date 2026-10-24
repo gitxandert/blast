@@ -109,6 +109,7 @@ pub fn load_assets(dir: &str) -> DecodeResult<(HashMap<String, AudioFile>, u32, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::file_parsing::decode_helpers::f32_to_i16;
     use std::path::PathBuf;
 
     fn wav_bytes(rate: u32, channels: u16, samples: &[i16]) -> Vec<u8> {
@@ -190,7 +191,7 @@ mod tests {
         assert_eq!(sorted_names(&tracks), vec!["a", "b", "c", "d", "e"]);
         assert_eq!(rate, 48000);
         assert_eq!(channels, 2);
-        assert_eq!(tracks["c"].samples, vec![4, 5]);
+        assert_eq!(f32_to_i16(&tracks["c"].samples), vec![4, 5]);
         assert_eq!(tracks["d"].format, "aiff");
     }
 

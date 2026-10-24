@@ -429,7 +429,12 @@ impl Voice {
         };
 
         Self {
-            samples: af.samples.clone(),
+            // tracks are f32 now (scaffold step 0); voices stay i16 until E1
+            samples: af
+                .samples
+                .iter()
+                .map(|&s| (s * 32768.0).clamp(-32768.0, 32767.0) as i16)
+                .collect(),
             channels: af.num_channels as usize,
             state: voice_state,
             processes: Vec::<Process>::new(),
@@ -748,7 +753,7 @@ impl Group {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio_processing::test_util::{conductor, render};
+    use crate::audio_processing::test_util::{conductor, pcm, render};
     use crate::audio_processing::{
         blast_rand::X128P,
         blast_time::{blast_time::TempoUnit, sample_rate},
@@ -762,7 +767,7 @@ mod tests {
             48000,
             channels,
             16,
-            vec![val; frames * channels as usize],
+            pcm(&vec![val; frames * channels as usize]),
         )
     }
 
@@ -872,7 +877,7 @@ mod tests {
 
     #[test]
     fn mono_voice_on_stereo_advances_once_per_frame() {
-        let af = AudioFile::new("m", "wav", 48000, 1, 16, (0..100).collect());
+        let af = AudioFile::new("m", "wav", 48000, 1, 16, pcm(&(0..100).collect::<Vec<_>>()));
         let mut c = one_voice(2, af, tempo(TempoMode::Voice, 100.0));
         start_voice(&mut c, 0);
 
@@ -888,7 +893,7 @@ mod tests {
     fn stereo_voice_on_stereo_keeps_channels() {
         // L = frame index, R = -frame index
         let samples: Vec<i16> = (0..100).flat_map(|s| [s, -s]).collect();
-        let af = AudioFile::new("s", "wav", 48000, 2, 16, samples);
+        let af = AudioFile::new("s", "wav", 48000, 2, 16, pcm(&samples));
         let mut c = one_voice(2, af, tempo(TempoMode::Voice, 100.0));
         start_voice(&mut c, 0);
 
@@ -901,7 +906,7 @@ mod tests {
 
     // mono [10,20,30,40,50] at 1 output channel with velocity `vel`
     fn render_at_velocity(vel: f32, frames: usize) -> Vec<i16> {
-        let af = AudioFile::new("v", "wav", 48000, 1, 16, vec![10, 20, 30, 40, 50]);
+        let af = AudioFile::new("v", "wav", 48000, 1, 16, pcm(&[10, 20, 30, 40, 50]));
         let mut c = one_voice(1, af, tempo(TempoMode::Voice, 100.0));
         c.apply(Command::Velocity(VelocityArgs {
             idx: Idx::Voice(0),
@@ -1037,7 +1042,7 @@ mod tests {
                 48000,
                 1,
                 16,
-                (0..1000).collect(),
+                pcm(&(0..1000).collect::<Vec<_>>()),
             )],
         );
         c.apply(Command::Load(LoadArgs {
@@ -1093,7 +1098,14 @@ mod tests {
 
     #[test]
     fn voice_seq_retriggers_voice() {
-        let af = AudioFile::new("t", "wav", 48000, 1, 16, (0..1000).collect());
+        let af = AudioFile::new(
+            "t",
+            "wav",
+            48000,
+            1,
+            16,
+            pcm(&(0..1000).collect::<Vec<_>>()),
+        );
         let mut c = one_voice(1, af, tempo(TempoMode::Voice, 100.0));
         c.apply(Command::Seq(SeqArgs {
             idx: Idx::Voice(0),
