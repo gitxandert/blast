@@ -26,7 +26,7 @@ use crate::audio_processing::{
         CmdQueue, CmdProcessor, Command, EngineState,
     },
     blast_time::{blast_time::clock, sample_rate},
-    line_editor::LineEditor,
+    line_editor::{LineEditor, Key, parse_key},
 };
 
 pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channels: u32) {
@@ -117,11 +117,12 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
         let mut cmd_idx = cmd_history.len();
 
         thread::spawn(move || {
+            let mut input = std::iter::from_fn(|| Some(read_char()));
             loop {
-                let c = read_char();
-               
-                match c {
-                    b'\n' | b'\r' => {
+                let key = parse_key(&mut input);
+
+                match key {
+                    Key::Enter => {
                         // enter
                         print!("\n");
                         let mut buf = editor.lock().unwrap();
@@ -148,52 +149,40 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
 
                         buf.clear();
                     }
-                    127 => {
-                        // backspace
+                    Key::Backspace => {
                         editor.lock().unwrap().backspace();
                     }
-                    3 => {
+                    Key::Interrupt => {
                         // CTL + C
                         raw_mode("off");
                         editor.lock().unwrap().clear();
                         println!("\nInterrupted.");
                         std::process::exit(130);
                     }
-                    27 => {
-                        // ESC
-                        let c2 = read_char();
-                        if c2 == b'[' {
-                            let c3 = read_char();
-                            match c3 {
-                                b'D' => { // left arrow
-                                    editor.lock().unwrap().left();
-                                }
-                                b'C' => { // right arrow
-                                    editor.lock().unwrap().right();
-                                }
-                                b'A' => { // up arrow
-                                    if cmd_idx > 0 {
-                                        cmd_idx -= 1;
-                                        let prev = cmd_history.get(cmd_idx).cloned().unwrap_or_default();
-                                        editor.lock().unwrap().set(prev);
-                                    }
-                                }
-                                b'B' => { // down arrow
-                                    if cmd_idx < cmd_history.len() {
-                                        cmd_idx += 1;
-                                        // past the newest entry -> empty line
-                                        let next = cmd_history.get(cmd_idx).cloned().unwrap_or_default();
-                                        editor.lock().unwrap().set(next);
-                                    }
-                                }
-                                _ => (),
-                            }
-                            continue;
+                    Key::Delete => editor.lock().unwrap().delete(),
+                    Key::Home => editor.lock().unwrap().home(),
+                    Key::End => editor.lock().unwrap().end(),
+                    Key::Left => editor.lock().unwrap().left(),
+                    Key::Right => editor.lock().unwrap().right(),
+                    Key::Up => {
+                        if cmd_idx > 0 {
+                            cmd_idx -= 1;
+                            let prev = cmd_history.get(cmd_idx).cloned().unwrap_or_default();
+                            editor.lock().unwrap().set(prev);
                         }
                     }
-                    _ => {
-                        editor.lock().unwrap().insert(c as char);
+                    Key::Down => {
+                        if cmd_idx < cmd_history.len() {
+                            cmd_idx += 1;
+                            // past the newest entry -> empty line
+                            let next = cmd_history.get(cmd_idx).cloned().unwrap_or_default();
+                            editor.lock().unwrap().set(next);
+                        }
                     }
+                    Key::Char(c) => {
+                        editor.lock().unwrap().insert(c);
+                    }
+                    Key::Ignore => (),
                 }
             }
         });

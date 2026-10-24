@@ -35,6 +35,21 @@ impl LineEditor {
         }
     }
 
+    // delete the char under the cursor
+    pub fn delete(&mut self) {
+        if self.cur < self.buf.len() {
+            self.buf.remove(self.cur);
+        }
+    }
+
+    pub fn home(&mut self) {
+        self.cur = 0;
+    }
+
+    pub fn end(&mut self) {
+        self.cur = self.buf.len();
+    }
+
     pub fn left(&mut self) {
         if self.cur > 0 { self.cur -= 1; }
     }
@@ -74,9 +89,173 @@ impl LineEditor {
     }
 }
 
+// one decoded keypress from the raw input stream
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Key {
+    Char(char),
+    Enter,
+    Backspace,
+    Delete,
+    Interrupt,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    // unknown/unsupported escape sequence (consumed in full), or end of input
+    Ignore,
+}
+
+// read one keypress from a raw byte stream
+//
+// escape sequences are consumed in full, so no trailing
+// bytes (e.g. the '~' of ESC[3~) leak into the line.
+// an ESC that doesn't start a CSI (ESC[) or SS3 (ESCO) sequence
+// is dropped and the following byte is read as a normal key,
+// so Alt+x (ESC x) types 'x' and ESC ESC [ D is still Left
+pub fn parse_key<I: Iterator<Item = u8>>(bytes: &mut I) -> Key {
+    let mut b = match bytes.next() {
+        Some(b) => b,
+        None => return Key::Ignore,
+    };
+
+    while b == 27 {
+        match bytes.next() {
+            Some(b'[') => return parse_csi(bytes),
+            Some(b'O') => return parse_ss3(bytes),
+            Some(next) => b = next,
+            None => return Key::Ignore,
+        }
+    }
+
+    match b {
+        b'\n' | b'\r' => Key::Enter,
+        127 | 8 => Key::Backspace,
+        3 => Key::Interrupt,
+        _ => Key::Char(b as char),
+    }
+}
+
+// after ESC[: parameter/intermediate bytes (0x20-0x3F),
+// then one final byte (0x40-0x7E)
+fn parse_csi<I: Iterator<Item = u8>>(bytes: &mut I) -> Key {
+    let mut params = Vec::new();
+    let fin = loop {
+        match bytes.next() {
+            Some(b @ 0x20..=0x3F) => params.push(b),
+            Some(b) => break b,
+            None => return Key::Ignore,
+        }
+    };
+
+    match (params.as_slice(), fin) {
+        (b"", b'A') => Key::Up,
+        (b"", b'B') => Key::Down,
+        (b"", b'C') => Key::Right,
+        (b"", b'D') => Key::Left,
+        (b"", b'H') | (b"1", b'~') | (b"7", b'~') => Key::Home,
+        (b"", b'F') | (b"4", b'~') | (b"8", b'~') => Key::End,
+        (b"3", b'~') => Key::Delete,
+        _ => Key::Ignore,
+    }
+}
+
+// after ESCO: one final byte (application cursor mode)
+fn parse_ss3<I: Iterator<Item = u8>>(bytes: &mut I) -> Key {
+    match bytes.next() {
+        Some(b'A') => Key::Up,
+        Some(b'B') => Key::Down,
+        Some(b'C') => Key::Right,
+        Some(b'D') => Key::Left,
+        Some(b'H') => Key::Home,
+        Some(b'F') => Key::End,
+        _ => Key::Ignore,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // parse a whole byte stream; a trailing Ignore (end of input) is dropped
+    fn keys(bytes: &[u8]) -> Vec<Key> {
+        let mut it = bytes.iter().copied();
+        let mut out = Vec::new();
+        while it.len() > 0 {
+            out.push(parse_key(&mut it));
+        }
+        out
+    }
+
+    #[test]
+    fn parse_arrows() {
+        assert_eq!(keys(&[27, 91, 68]), vec![Key::Left]);
+        assert_eq!(keys(&[27, 91, 67]), vec![Key::Right]);
+        assert_eq!(keys(&[27, 91, 65]), vec![Key::Up]);
+        assert_eq!(keys(&[27, 91, 66]), vec![Key::Down]);
+        assert_eq!(keys(&[27, b'O', b'D']), vec![Key::Left]);
+    }
+
+    #[test]
+    fn parse_delete_leaves_no_tilde() {
+        assert_eq!(keys(&[27, 91, 51, 126]), vec![Key::Delete]);
+        assert_eq!(keys(&[27, 91, 51, 126, b'a']), vec![Key::Delete, Key::Char('a')]);
+    }
+
+    #[test]
+    fn parse_home_end() {
+        assert_eq!(keys(b"\x1b[H\x1b[F"), vec![Key::Home, Key::End]);
+        assert_eq!(keys(b"\x1b[1~\x1b[4~"), vec![Key::Home, Key::End]);
+        assert_eq!(keys(b"\x1bOH\x1bOF"), vec![Key::Home, Key::End]);
+    }
+
+    #[test]
+    fn parse_unknown_csi_consumed_in_full() {
+        // F5 = ESC[15~, Ctrl+Right = ESC[1;5C
+        assert_eq!(keys(b"\x1b[15~a"), vec![Key::Ignore, Key::Char('a')]);
+        assert_eq!(keys(b"\x1b[1;5Cb"), vec![Key::Ignore, Key::Char('b')]);
+    }
+
+    #[test]
+    fn parse_esc_then_key_keeps_key() {
+        assert_eq!(keys(&[27, 120]), vec![Key::Char('x')]);
+        assert_eq!(keys(&[27, 27, 91, 68]), vec![Key::Left]);
+        assert_eq!(keys(&[27, 13]), vec![Key::Enter]);
+    }
+
+    #[test]
+    fn parse_plain_keys() {
+        assert_eq!(keys(&[127]), vec![Key::Backspace]);
+        assert_eq!(keys(&[13]), vec![Key::Enter]);
+        assert_eq!(keys(&[10]), vec![Key::Enter]);
+        assert_eq!(keys(&[3]), vec![Key::Interrupt]);
+        assert_eq!(keys(b"ab"), vec![Key::Char('a'), Key::Char('b')]);
+    }
+
+    #[test]
+    fn parse_truncated_or_empty_is_ignored() {
+        assert_eq!(keys(&[27, 91]), vec![Key::Ignore]);
+        assert_eq!(keys(&[27]), vec![Key::Ignore]);
+        assert_eq!(parse_key(&mut [0u8; 0].iter().copied()), Key::Ignore);
+    }
+
+    #[test]
+    fn delete_home_end() {
+        let mut ed = editor("abc", 1);
+        ed.delete();
+        assert_eq!(ed.buf(), "ac");
+        assert_eq!(ed.cursor(), 1);
+        ed.end();
+        assert_eq!(ed.cursor(), 2);
+        ed.delete();
+        assert_eq!(ed.buf(), "ac");
+        ed.home();
+        assert_eq!(ed.cursor(), 0);
+        ed.delete();
+        assert_eq!(ed.buf(), "c");
+        assert_eq!(ed.cursor(), 0);
+    }
 
     fn editor(line: &str, cur: usize) -> LineEditor {
         let mut ed = LineEditor::new();
