@@ -8,6 +8,7 @@ use std::{ffi::c_void, collections::HashMap};
 use alsa_sys::snd_pcm_channel_area_t;
 
 use crate::audio_processing::engine::Conductor;
+use crate::audio_processing::commands::{CmdProcessor, EngineState};
 use crate::file_parsing::decode_helpers::AudioFile;
 
 // interleaved i16 buffer of frames * channels, like ALSA's mmap areas
@@ -37,6 +38,34 @@ pub fn conductor(channels: usize, tracks: Vec<AudioFile>) -> Conductor {
         .collect();
 
     Conductor::prepare(channels, map)
+}
+
+// CmdProcessor and Conductor whose track indices agree, built the way
+// run_blast builds them (EngineState gets a clone of the same HashMap,
+// so both iterate the tracks in the same order)
+pub fn setup(channels: usize, tracks: Vec<AudioFile>) -> (CmdProcessor, Conductor) {
+    let map: HashMap<String, AudioFile> = tracks
+        .into_iter()
+        .map(|af| (af.file_name.clone(), af))
+        .collect();
+
+    let state = EngineState::new(map.clone().into_values().collect(), channels);
+
+    (CmdProcessor::new(state), Conductor::prepare(channels, map))
+}
+
+// parse a command line and apply it to the Conductor;
+// panics if the command doesn't parse
+pub fn run(cp: &mut CmdProcessor, conductor: &mut Conductor, cmd: &str) {
+    match cp.parse(cmd.to_string()) {
+        Ok(command) => conductor.apply(command),
+        Err(error) => panic!("'{}' failed: {}", cmd, error),
+    }
+}
+
+// mono track whose samples are all `val`
+pub fn track(name: &str, val: i16, frames: usize) -> AudioFile {
+    AudioFile::new(name, "wav", 48000, 1, 16, vec![val; frames])
 }
 
 #[cfg(test)]

@@ -143,6 +143,10 @@ impl Conductor {
                 let voice: &mut Voice = self.voices.get_mut(idx).unwrap();
                 voice.start();
             }
+            Idx::GroupVoice(g, v) => {
+                let voice: &mut Voice = self.groups[g].voices.get_mut(v).unwrap();
+                voice.start();
+            }
             Idx::Group(idx) => {
                 let group: &mut Group = self.groups.get_mut(idx).unwrap();
                 group.start();
@@ -159,6 +163,10 @@ impl Conductor {
         match args.idx {
             Idx::Voice(idx) => {
                 let voice: &mut Voice = self.voices.get_mut(idx).unwrap();
+                voice.pause();
+            }
+            Idx::GroupVoice(g, v) => {
+                let voice: &mut Voice = self.groups[g].voices.get_mut(v).unwrap();
                 voice.pause();
             }
             Idx::Group(idx) => {
@@ -179,6 +187,10 @@ impl Conductor {
                 let voice: &mut Voice = self.voices.get_mut(idx).unwrap();
                 voice.resume();
             }
+            Idx::GroupVoice(g, v) => {
+                let voice: &mut Voice = self.groups[g].voices.get_mut(v).unwrap();
+                voice.resume();
+            }
             Idx::Group(idx) => {
                 let group: &mut Group = self.groups.get_mut(idx).unwrap();
                 group.resume();
@@ -195,6 +207,10 @@ impl Conductor {
         match args.idx {
             Idx::Voice(idx) => {
                 let voice: &mut Voice = self.voices.get_mut(idx).unwrap();
+                voice.stop();
+            }
+            Idx::GroupVoice(g, v) => {
+                let voice: &mut Voice = self.groups[g].voices.get_mut(v).unwrap();
                 voice.stop();
             }
             Idx::Group(idx) => {
@@ -214,28 +230,42 @@ impl Conductor {
     }
 
     fn velocity(&mut self, args: VelocityArgs) {
-        let voice: &mut Voice = self.voices.get_mut(args.idx).unwrap();
+        let voice: &mut Voice = match args.idx {
+            Idx::Voice(v) => self.voices.get_mut(v).unwrap(),
+            Idx::GroupVoice(g, v) => self.groups[g].voices.get_mut(v).unwrap(),
+            _ => return, // will only be Voice or GroupVoice
+        };
         voice.state.velocity = args.val;
     }
 
     fn group(&mut self, args: GroupArgs) {
        let tempo = self.tempo_from_repr(args.tempo);
-       let mut voices: Vec<Voice> = Vec::new();
-       for (idx, update_tempo, p_ids) in args.vs_fs_ps {
+       let vs_fs_ps = args.vs_fs_ps;
+
+       // vs_fs_ps is in Group order; remove Voices in reverse idx
+       // order so each removal doesn't shift the ones still to come,
+       // then put each Voice in its slot in the Group
+       let mut order: Vec<usize> = (0..vs_fs_ps.len()).collect();
+       order.sort_by(|a, b| vs_fs_ps[*b].0.cmp(&vs_fs_ps[*a].0));
+
+       let mut slots: Vec<Option<Voice>> = vs_fs_ps.iter().map(|_| None).collect();
+       for pos in order {
+           let (idx, update_tempo, p_ids) = &vs_fs_ps[pos];
            // move Voices out of conductor.voices into group.voices
-           let mut voice = self.voices.remove(idx);
-           if update_tempo {
+           let mut voice = self.voices.remove(*idx);
+           if *update_tempo {
                // refer to Group TempoState
                voice.state.tempo = Rc::clone(&tempo);
                for p in p_ids {
                    // these Processes also refer to the 
                    // Group TempoState
-                   let mut process = &mut voice.processes[p];
+                   let process = &mut voice.processes[*p];
                    process.update_tempo(Rc::clone(&tempo));
                }
            }
-           voices.push(voice);
+           slots[pos] = Some(voice);
        }
+       let voices: Vec<Voice> = slots.into_iter().map(|v| v.unwrap()).collect();
 
        let group = Group::new(voices, tempo);
        self.groups.push(group);
@@ -249,7 +279,16 @@ impl Conductor {
     // Processes
     //
     fn seq(&mut self, args: SeqArgs) {
-        let tempo = self.tempo_from_repr(TempoRepr::clone(&args.tempo));
+        let tempo = match args.idx {
+            // a Voice/TBD reference is to the Seq's own Voice (-t v);
+            // tempo_from_repr only knows Conductor.voices, so take
+            // a grouped Voice's TempoState directly
+            Idx::GroupVoice(g, v) if !args.tempo.owned
+                && (args.tempo.mode == TempoMode::Voice || args.tempo.mode == TempoMode::TBD) => {
+                Rc::clone(&self.groups[g].voices[v].state.tempo)
+            }
+            _ => self.tempo_from_repr(TempoRepr::clone(&args.tempo)),
+        };
         let state = SeqState {
             active: true,
             tempo: Rc::clone(&tempo),
@@ -276,6 +315,13 @@ impl Conductor {
                     voice.proc_tempi.push(tempo);
                 }
             }
+            Idx::GroupVoice(g, v) => {
+                let voice: &mut Voice = self.groups[g].voices.get_mut(v).unwrap();
+                voice.processes.push(Process::Seq(Seq { state }));
+                if args.tempo.mode == TempoMode::Process {
+                    voice.proc_tempi.push(tempo);
+                }
+            }
             Idx::Group(g) => {
                 let group: &mut Group = self.groups.get_mut(g).unwrap();
                 group.processes.push(Process::Seq(Seq { state }));
@@ -297,7 +343,9 @@ impl Conductor {
             tempo.borrow_mut().init(tr.mode, tr.unit, tr.interval);
         } else {
             match tr.mode {
-                TempoMode::Voice => {
+                // TBD here means the Voice was loaded without a tempo;
+                // still share its (future) TempoState
+                TempoMode::Voice | TempoMode::TBD => {
                     tempo = Rc::clone(&self.voices[tr.idx].state.tempo);
                 }
                 TempoMode::Group => {
@@ -307,7 +355,7 @@ impl Conductor {
                     tempo = Rc::clone(&self.tempo_cons[tr.idx]);
                 }
                 // Process will never borrow from another Process
-                TempoMode::Process | TempoMode::TBD => (),
+                TempoMode::Process => (),
             }
         }
 
@@ -815,7 +863,7 @@ mod tests {
     fn render_at_velocity(vel: f32, frames: usize) -> Vec<i16> {
         let af = AudioFile::new("v", "wav", 48000, 1, 16, vec![10, 20, 30, 40, 50]);
         let mut c = one_voice(1, af, tempo(TempoMode::Voice, 100.0));
-        c.apply(Command::Velocity(VelocityArgs { idx: 0, val: vel }));
+        c.apply(Command::Velocity(VelocityArgs { idx: Idx::Voice(0), val: vel }));
         start_voice(&mut c, 0);
         render(&mut c, 1, frames)
     }
@@ -999,5 +1047,296 @@ mod tests {
 
         let out = render(&mut c, 2, 50);
         assert!(out.iter().all(|&s| s == 1234));
+    }
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+    use crate::audio_processing::test_util::{setup, run, track, render};
+
+    fn seq_tempo(p: &Process) -> Rc<RefCell<TempoState>> {
+        match p {
+            Process::Seq(s) => Rc::clone(&s.state.tempo),
+        }
+    }
+
+    // tempo references (B15)
+
+    #[test]
+    fn seq_voice_tempo_shares_its_voice_rc() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("kick", 1, 16), track("snare", 2, 16)]);
+        run(&mut cp, &mut c, "load kick");
+        run(&mut cp, &mut c, "load snare -t b:120");
+        run(&mut cp, &mut c, "seq snare -t v -s 0");
+
+        let seq = seq_tempo(&c.voices[1].processes[0]);
+        assert!(Rc::ptr_eq(&seq, &c.voices[1].state.tempo));
+        assert!(!Rc::ptr_eq(&seq, &c.voices[0].state.tempo));
+    }
+
+    #[test]
+    fn seq_tbd_voice_tempo_shares_its_voice_rc() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("kick", 1, 16), track("snare", 2, 16)]);
+        run(&mut cp, &mut c, "load kick");
+        run(&mut cp, &mut c, "load snare");
+        run(&mut cp, &mut c, "seq snare -t v -s 0");
+
+        let seq = seq_tempo(&c.voices[1].processes[0]);
+        assert!(Rc::ptr_eq(&seq, &c.voices[1].state.tempo));
+    }
+
+    #[test]
+    fn group_tempo_refs_share_the_right_group_rc() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![
+            track("a", 1, 16), track("b", 2, 16), track("c", 3, 16), track("d", 4, 16),
+        ]);
+        run(&mut cp, &mut c, "load a");
+        run(&mut cp, &mut c, "load b");
+        run(&mut cp, &mut c, "load c");
+        run(&mut cp, &mut c, "group g1 -v a");
+        run(&mut cp, &mut c, "group g2 -v b");
+        run(&mut cp, &mut c, "seq c -t g:g2 -s 0");
+        run(&mut cp, &mut c, "load d -t g:g1");
+
+        // c is voices[0], d is voices[1]
+        let seq = seq_tempo(&c.voices[0].processes[0]);
+        assert!(Rc::ptr_eq(&seq, &c.groups[1].state.tempo));
+        assert!(Rc::ptr_eq(&c.voices[1].state.tempo, &c.groups[0].state.tempo));
+    }
+
+    #[test]
+    fn context_tempo_refs_share_the_context_rc() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("a", 1, 16)]);
+        run(&mut cp, &mut c, "tc c1 b:120");
+        run(&mut cp, &mut c, "tc c2 b:90");
+        run(&mut cp, &mut c, "load a -t c:c2");
+        run(&mut cp, &mut c, "seq a -t c:c1 -s 0");
+
+        assert!(Rc::ptr_eq(&c.voices[0].state.tempo, &c.tempo_cons[1]));
+        assert!(Rc::ptr_eq(&seq_tempo(&c.voices[0].processes[0]), &c.tempo_cons[0]));
+    }
+
+    // grouping
+
+    // tracks are constant-valued, so samples[0] identifies a Voice
+    fn id(v: &Voice) -> i16 {
+        v.samples[0]
+    }
+
+    #[test]
+    fn group_voices_follow_mirror_order() {
+        sample_rate::set(48000);
+        for (cmd, want) in [("group g -v c,a", [3, 1]), ("group g -v a,c", [1, 3])] {
+            let (mut cp, mut c) = setup(1, vec![
+                track("a", 1, 16), track("b", 2, 16), track("c", 3, 16),
+            ]);
+            run(&mut cp, &mut c, "load a");
+            run(&mut cp, &mut c, "load b");
+            run(&mut cp, &mut c, "load c");
+            run(&mut cp, &mut c, cmd);
+
+            let g = &c.groups[0];
+            assert_eq!(g.voices.len(), 2);
+            assert_eq!(id(&g.voices[0]), want[0]);
+            assert_eq!(id(&g.voices[1]), want[1]);
+            assert_eq!(c.voices.len(), 1);
+            assert_eq!(id(&c.voices[0]), 2);
+        }
+    }
+
+    #[test]
+    fn grouped_voices_play_through_the_group() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("a", 100, 16), track("b", 20, 16)]);
+        run(&mut cp, &mut c, "load a");
+        run(&mut cp, &mut c, "load b");
+        run(&mut cp, &mut c, "group g -v b,a");
+        run(&mut cp, &mut c, "start -g g");
+
+        let out = render(&mut c, 1, 4);
+        assert_eq!(out[0], 120);
+    }
+
+    // addressing grouped voices (B04)
+
+    fn grouped() -> (CmdProcessor, Conductor) {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![
+            track("a", 1, 16), track("b", 2, 16), track("c", 3, 16),
+        ]);
+        run(&mut cp, &mut c, "load a");
+        run(&mut cp, &mut c, "load b -t b:120");
+        run(&mut cp, &mut c, "load c");
+        run(&mut cp, &mut c, "group g -v a,b");
+        (cp, c)
+    }
+
+    #[test]
+    fn velocity_reaches_group_voice() {
+        let (mut cp, mut c) = grouped();
+        run(&mut cp, &mut c, "velocity g.b 2");
+
+        assert_eq!(id(&c.groups[0].voices[1]), 2);
+        assert_eq!(c.groups[0].voices[1].state.velocity, 2.0);
+        assert_eq!(c.groups[0].voices[0].state.velocity, 1.0);
+        assert_eq!(c.voices[0].state.velocity, 1.0);
+
+        run(&mut cp, &mut c, "velocity c 0.5");
+        assert_eq!(c.voices[0].state.velocity, 0.5);
+    }
+
+    #[test]
+    fn start_stop_reach_group_voice() {
+        let (mut cp, mut c) = grouped();
+        run(&mut cp, &mut c, "start -v g.a");
+        assert!(c.groups[0].voices[0].state.active);
+        assert!(!c.groups[0].voices[1].state.active);
+        assert!(!c.voices[0].state.active);
+
+        run(&mut cp, &mut c, "pause -v g.a");
+        assert!(!c.groups[0].voices[0].state.active);
+        run(&mut cp, &mut c, "resume -v g.a");
+        assert!(c.groups[0].voices[0].state.active);
+        run(&mut cp, &mut c, "stop -v g.a");
+        assert!(!c.groups[0].voices[0].state.active);
+    }
+
+    #[test]
+    fn seq_reaches_group_voice() {
+        let (mut cp, mut c) = grouped();
+        run(&mut cp, &mut c, "seq g.b -t v -s 0");
+
+        let b = &c.groups[0].voices[1];
+        assert_eq!(b.processes.len(), 1);
+        assert!(Rc::ptr_eq(&seq_tempo(&b.processes[0]), &b.state.tempo));
+        assert!(c.groups[0].voices[0].processes.is_empty());
+        assert!(c.voices[0].processes.is_empty());
+    }
+
+    // group tempo (B12)
+
+    #[test]
+    fn group_shares_context_rc() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("a", 1, 16)]);
+        run(&mut cp, &mut c, "tc other b:60");
+        run(&mut cp, &mut c, "tc clk b:120");
+        run(&mut cp, &mut c, "load a");
+        run(&mut cp, &mut c, "group g -t c:clk -v a");
+
+        let g = &c.groups[0];
+        assert!(Rc::ptr_eq(&g.state.tempo, &c.tempo_cons[1]));
+        assert!(Rc::ptr_eq(&g.voices[0].state.tempo, &c.tempo_cons[1]));
+        assert_eq!(g.state.tempo.borrow().mode, TempoMode::Context);
+    }
+
+    // flags / process ids stay with their voice (B13)
+
+    #[test]
+    fn group_tempo_goes_to_the_right_voices() {
+        sample_rate::set(48000);
+        for _ in 0..10 {
+            for perm in ["a,b,c", "b,c,a", "c,a,b", "c,b,a"] {
+                let (mut cp, mut c) = setup(1, vec![
+                    track("a", 1, 16), track("b", 2, 16), track("c", 3, 16),
+                ]);
+                run(&mut cp, &mut c, "load a");
+                run(&mut cp, &mut c, "load b -t b:90");
+                run(&mut cp, &mut c, "load c");
+                run(&mut cp, &mut c, "seq a -t v -s 0");
+                run(&mut cp, &mut c, &format!("group g -v {}", perm));
+
+                let g = &c.groups[0];
+                for v in &g.voices {
+                    let shares = Rc::ptr_eq(&v.state.tempo, &g.state.tempo);
+                    assert_eq!(shares, id(v) != 2, "voice {} in {}", id(v), perm);
+                    if id(v) == 1 {
+                        assert!(Rc::ptr_eq(&seq_tempo(&v.processes[0]), &g.state.tempo));
+                    }
+                }
+            }
+        }
+    }
+
+    // only voice-following processes move to the group tempo (B14)
+
+    #[test]
+    fn group_keeps_owned_seq_tempo() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("a", 1, 16)]);
+        run(&mut cp, &mut c, "load a");
+        // the voice-following seq goes first: until B22 gives each seq its
+        // own mirror key, the second seq overwrites the first one's ProcRepr
+        run(&mut cp, &mut c, "seq a -t v -s 0");
+        run(&mut cp, &mut c, "seq a -t b:140 -s 0");
+        let own = seq_tempo(&c.voices[0].processes[1]);
+        run(&mut cp, &mut c, "group g -v a");
+
+        let g = &c.groups[0];
+        let a = &g.voices[0];
+        assert!(Rc::ptr_eq(&a.state.tempo, &g.state.tempo));
+        let after = seq_tempo(&a.processes[1]);
+        assert!(Rc::ptr_eq(&after, &own));
+        assert!(!Rc::ptr_eq(&after, &g.state.tempo));
+        assert_eq!(after.borrow().mode, TempoMode::Process);
+    }
+
+    #[test]
+    fn group_repoints_voice_following_seq() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("a", 1, 16)]);
+        run(&mut cp, &mut c, "load a");
+        run(&mut cp, &mut c, "seq a -t v -s 0");
+        run(&mut cp, &mut c, "group g -v a");
+
+        let g = &c.groups[0];
+        assert!(Rc::ptr_eq(&seq_tempo(&g.voices[0].processes[0]), &g.state.tempo));
+    }
+
+    // failed commands don't touch the mirror (B16)
+
+    #[test]
+    fn failed_group_keeps_mirror_and_engine_in_sync() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("a", 1, 16), track("b", 2, 16)]);
+        run(&mut cp, &mut c, "load a");
+        run(&mut cp, &mut c, "load b");
+        assert!(cp.parse("group g -v a,nope".to_string()).is_err());
+
+        // b is still voices[1] on both sides
+        run(&mut cp, &mut c, "velocity b 2");
+        assert_eq!(c.voices.len(), 2);
+        assert_eq!(c.voices[1].state.velocity, 2.0);
+        assert_eq!(c.voices[0].state.velocity, 1.0);
+
+        run(&mut cp, &mut c, "group g -v a");
+        assert_eq!(id(&c.groups[0].voices[0]), 1);
+        assert_eq!(id(&c.voices[0]), 2);
+    }
+
+    // duplicate names (B17)
+
+    #[test]
+    fn later_names_match_engine_positions_after_duplicates() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("a", 1, 16), track("b", 2, 16)]);
+        run(&mut cp, &mut c, "tc x b:120");
+        assert!(cp.parse("tc x b:90".to_string()).is_err());
+        run(&mut cp, &mut c, "tc y b:60");
+        run(&mut cp, &mut c, "load a");
+        run(&mut cp, &mut c, "load b");
+        run(&mut cp, &mut c, "group g -v a");
+        assert!(cp.parse("group g -v b".to_string()).is_err());
+        run(&mut cp, &mut c, "group h -t c:y -v b");
+
+        assert_eq!(c.tempo_cons.len(), 2);
+        assert_eq!(c.groups.len(), 2);
+        assert!(Rc::ptr_eq(&c.groups[1].state.tempo, &c.tempo_cons[1]));
+        assert_eq!(id(&c.groups[1].voices[0]), 2);
     }
 }

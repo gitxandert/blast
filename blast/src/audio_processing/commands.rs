@@ -50,6 +50,16 @@ impl CmdQueue {
         Ok(())
     }
 
+    // only meaningful on the producer side: the consumer can only
+    // make room, so a queue that isn't full stays that way until
+    // the producer pushes
+    pub fn is_full(&self) -> bool {
+        let head = self.head.load(Ordering::Relaxed);
+        let tail = self.tail.load(Ordering::Acquire);
+
+        (head + 1) % self.cap == tail
+    }
+
     pub fn try_pop(&self) -> Option<Command> {
         let tail = self.tail.load(Ordering::Relaxed);
         let head = self.head.load(Ordering::Acquire);
@@ -130,13 +140,15 @@ pub struct UnloadArgs {
 }
 
 pub struct VelocityArgs {
-    pub idx: usize,
+    pub idx: Idx,
     pub val: f32,
 }
 
 pub struct GroupArgs {
     pub tempo: TempoRepr,
     pub vs_fs_ps: Vec<(usize, bool, Vec<usize>)>, 
+    // in Group order (entry i becomes the Group's Voice i,
+    // matching the VoiceRepr idx in the GroupRepr),
     // store the ids Voice
     // with whether or not its TempoState refers to the Group's
     // and with the ids of all of the Processes 
@@ -164,11 +176,15 @@ pub struct QuitArgs {}
 
 // use for terse, ambiguous Commands like Start;
 // prefer Reprs when more info is required
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Idx {
     Tempo(usize),
     Voice(usize),
     Process(usize),
     Group(usize),
+    // a Voice inside a Group: (Group idx, Voice idx in that Group);
+    // Voice is only for Voices in Conductor.voices
+    GroupVoice(usize, usize),
     // don't need one for Track because TrackRepr is already
     // just an index, and there are few Commands that operate on
     // Tracks, so it'll never be ambiguous
@@ -224,6 +240,19 @@ impl TempoRepr {
             unit: other.unit,
             interval: other.interval,
         }
+    }
+
+    // like clone_owner, but for referring to the TempoState of a Voice
+    // or Group: if that object owns its TempoState, point at the
+    // object's current idx in the engine (its TempoRepr's own idx
+    // is meaningless); otherwise it already refers to something else
+    // (e.g. a TempoContext), so keep that reference
+    fn clone_from(other: &TempoRepr, owner_idx: usize) -> Self {
+        let mut repr = TempoRepr::clone_owner(other);
+        if other.owned {
+            repr.idx = owner_idx;
+        }
+        repr
     }
 
     fn init(&mut self, mode: TempoMode, unit: TempoUnit, interval: f32) {
@@ -341,6 +370,19 @@ impl CmdProcessor {
         }
     }
 
+    // parse cmd and push it to the engine;
+    // parse() updates the mirror, so make sure the push can't fail
+    // afterwards (the command thread is the only producer, so a
+    // queue with room before parse still has room after)
+    pub fn submit(&mut self, cmd: String, queue: &CmdQueue) -> Result<(), String> {
+        if queue.is_full() {
+            return Err(String::from("Command queue full"));
+        }
+
+        let valid = self.parse(cmd).map_err(|error| error.to_string())?;
+        queue.try_push(valid)
+    }
+
     // CmdResults (returned directly to command thread)
     //
     fn try_load(&mut self, args: String) -> CmdResult<Command> {
@@ -422,7 +464,7 @@ impl CmdProcessor {
                             })?;
 
                         tempo_repr = match self.find_group(g_name.to_string()) {
-                            Ok(g) => TempoRepr::clone_owner(&g.tempo),
+                            Ok(g) => TempoRepr::clone_from(&g.tempo, g.idx),
                             Err(error) => return Err(error.into()),
                         };
                         continue;
@@ -548,11 +590,8 @@ impl CmdProcessor {
                 cmd: "velocity".to_string() 
             })?;
         
-        let vidx = self.get_idx("-v".to_string(), name.to_string())?;
-        let idx = match vidx {
-            Idx::Voice(i) => i,
-            _ => 0,
-        }; // this will match
+        // Idx::Voice or Idx::GroupVoice
+        let idx = self.get_idx("-v".to_string(), name.to_string())?;
 
         let val = args
             .next()
@@ -580,14 +619,23 @@ impl CmdProcessor {
                 cmd: "group".to_string() 
             })?;
 
+        // a second Group by the same name would replace the first
+        // in the mirror but not in the engine, shifting every later idx
+        if self.engine_state.groups.contains_key(name) {
+            return Err(CmdErr::AlreadyIs { 
+                ty: "Group".to_string(), 
+                name: name.to_string() 
+            });
+        }
+
         // -t tempo -v voices
 
         let mut tempo = TempoRepr::new(0);
         tempo.init(TempoMode::Group, TempoUnit::Bpm, 240.0);
-        let mut voices = HashMap::<String, VoiceRepr>::new();
-        // save Voice indices as Voices are collected,
-        // since these indices will change when added to voices
-        let mut v_ids = Vec::<usize>::new();
+        // names of the Voices to group, in command-line (Group) order;
+        // nothing in engine_state changes until all args are valid,
+        // so a failed command leaves the mirror untouched
+        let mut v_names = Vec::<String>::new();
 
         while let Some(arg) = args.next() {
             match arg {
@@ -610,8 +658,8 @@ impl CmdProcessor {
                                         cmd: "group -t".to_string() 
                                     })?;
 
-                                match self.find_tc(name.to_string()) {
-                                    Ok(tc) => tempo = TempoRepr::clone(&tc),
+                                match self.find_tc(tc_name.to_string()) {
+                                    Ok(tc) => tempo = TempoRepr::clone_owner(&tc),
                                     Err(error) => return Err(error.into()),
                                 }
                             } else {
@@ -652,39 +700,20 @@ impl CmdProcessor {
                 "-v" | "--voices" => {
                     match args.next() {
                         Some(v) => {
-                            let names: Vec<_> = v.split(',').collect();
-
-                            // need to collect all indices of the Voices that
-                            // are being removed; then sort high to low
-                            // and decrement all other indices -ge
-                            for name in names {
+                            for name in v.split(',') {
                                 let name = name.to_string();
-                                match self.engine_state.voices.remove(&name) {
-                                    Some(mut voice) => {
-                                        v_ids.push(voice.idx);
-                                        voice.idx = voices.len(); // assign new index
-                                                                  // in Group's Vec
-                                        voices.insert(name, voice);
-                                    }
-                                    None => return Err(CmdErr::NoVoice { 
+                                if !self.engine_state.voices.contains_key(&name) {
+                                    return Err(CmdErr::NoVoice { 
                                         name: name, 
                                         group: None 
-                                    }),
+                                    });
                                 }
-                            }
-
-                            // sort removed voices in reverse
-                            // so that the remaining voice.idx
-                            // are decremented correctly
-                            let mut sorted = v_ids.clone();
-                            sorted.sort_by(|a, b| b.cmp(a));
-
-                            for removed_id in sorted {
-                                for (_, v) in &mut self.engine_state.voices {
-                                    if v.idx > removed_id {
-                                        v.idx -= 1;
-                                    }
+                                if v_names.contains(&name) {
+                                    return Err(CmdErr::Formatting { 
+                                        err: format!("Voice '{}' listed more than once", name) 
+                                    });
                                 }
+                                v_names.push(name);
                             }
                         }
                         None => return Err(CmdErr::MissingArg { 
@@ -700,6 +729,37 @@ impl CmdProcessor {
             }
         }
        
+        // all args are valid; move the Voices out of the top level
+        //
+        // kept in command-line (Group) order, so that flags and
+        // Process ids below line up with v_ids
+        let mut voices = Vec::<(String, VoiceRepr)>::new();
+        // save Voice indices as Voices are collected,
+        // since these indices will change when added to voices
+        let mut v_ids = Vec::<usize>::new();
+
+        for name in v_names {
+            let mut voice = self.engine_state.voices.remove(&name).unwrap();
+            v_ids.push(voice.idx);
+            voice.idx = voices.len(); // assign new index
+                                      // in Group's Vec
+            voices.push((name, voice));
+        }
+
+        // sort removed voices in reverse
+        // so that the remaining voice.idx
+        // are decremented correctly
+        let mut sorted = v_ids.clone();
+        sorted.sort_by(|a, b| b.cmp(a));
+
+        for removed_id in sorted {
+            for (_, v) in &mut self.engine_state.voices {
+                if v.idx > removed_id {
+                    v.idx -= 1;
+                }
+            }
+        }
+
         // assign flags to each Voice depending on whether its
         // TempoState will refer to the Group's
         let mut v_flags: Vec<bool> = Vec::new();
@@ -707,6 +767,8 @@ impl CmdProcessor {
         // collect indices of Processes whose TempoStates are being
         // assigned to the Group's TempoState
         let mut p_ids: Vec<Vec<usize>> = Vec::new();
+
+        let g_idx = self.engine_state.groups.len();
 
         for (_, voice) in &mut voices {
             // if the Voice wasn't assigned a TempoState at birth,
@@ -716,7 +778,7 @@ impl CmdProcessor {
             let mut p_i: Vec<usize> = Vec::new();
 
             if voice.tempo.mode == TempoMode::TBD {
-                voice.tempo = TempoRepr::clone_owner(&tempo);
+                voice.tempo = TempoRepr::clone_from(&tempo, g_idx);
                 v_flags.push(true);
                 for (_, mut process) in &mut voice.processes {
                     // checks if any Process tempo has TempoMode::TBD
@@ -725,10 +787,13 @@ impl CmdProcessor {
                     // Voice being added to a Group later)
                     match &process.tempo {
                         Some(t) => {
+                            // only re-point Processes that follow
+                            // the Voice; ones with their own (or a
+                            // shared) TempoState keep it
                             if t.mode == TempoMode::TBD {
-                                process.tempo = Some(TempoRepr::clone_owner(&tempo));
+                                process.tempo = Some(TempoRepr::clone_from(&tempo, g_idx));
+                                p_i.push(process.idx);
                             }
-                            p_i.push(process.idx);
                         }
                         None => (),
                     }
@@ -740,23 +805,18 @@ impl CmdProcessor {
             p_ids.push(p_i);
         }
 
-        let group = GroupRepr::new(self.engine_state.groups.len(), TempoRepr::clone(&tempo), voices);
+        let group = GroupRepr::new(g_idx, TempoRepr::clone(&tempo), voices.into_iter().collect());
 
         self.engine_state.groups.insert(name.to_string(), group);
 
-        let mut vs_fs_ps: Vec<(usize, bool, Vec<usize>)> = 
+        // keep Group order; the engine removes Voices from
+        // Conductor.voices in reverse itself
+        let vs_fs_ps: Vec<(usize, bool, Vec<usize>)> = 
             v_ids.into_iter()
                  .zip(v_flags)
                  .zip(p_ids)
                  .map(|((a, b), c) | (a, b, c))
                  .collect();
-        // sort in reverse so that Voices are removed from
-        // Conductor.voices in reverse
-        vs_fs_ps.sort_by(|a, b| {
-            let (va, _, _) = a;
-            let (vb, _, _) = b;
-            vb.cmp(va)
-        });
 
         Ok(Command::Group(GroupArgs { tempo, vs_fs_ps }))
     }
@@ -769,6 +829,14 @@ impl CmdProcessor {
                 arg: "name".to_string(), 
                 cmd: "tempocon".to_string() 
             })?;        
+
+        // see try_group
+        if self.engine_state.tempo_cons.contains_key(name) {
+            return Err(CmdErr::AlreadyIs { 
+                ty: "TempoContext".to_string(), 
+                name: name.to_string() 
+            });
+        }
 
         let tempo = args
             .next()
@@ -871,7 +939,7 @@ impl CmdProcessor {
                             // refer to Voice's TempoState
                             tempo = {
                                 let voice = self.find_voice(name.clone())?;
-                                TempoRepr::clone_owner(&voice.tempo)
+                                TempoRepr::clone_from(&voice.tempo, voice.idx)
                             };
                             continue;
                         }
@@ -893,7 +961,7 @@ impl CmdProcessor {
                         let g_name = t_args.get(1).unwrap();
                         let g_name = g_name.to_string();
                         let g = self.find_group(g_name)?;
-                        tempo = TempoRepr::clone_owner(&g.tempo);
+                        tempo = TempoRepr::clone_from(&g.tempo, g.idx);
                         continue;
                     }
 
@@ -1297,6 +1365,7 @@ impl CmdProcessor {
         }
 
         // TODO: allow for Idx::Group
+        let owner = self.find_voice_idx(name.clone())?;
         let voice = self.find_voice(name.clone())?;
 
         // each Process needs its own key so that processes.len()
@@ -1324,7 +1393,7 @@ impl CmdProcessor {
 
         let repr = ProcRepr::new(
             voice.processes.len(), 
-            Idx::Voice(voice.idx), 
+            owner, 
             Some(TempoRepr::clone(&tempo))
         );
         voice.processes.insert(p_name, repr);
@@ -1337,7 +1406,7 @@ impl CmdProcessor {
         }
 
         let args = SeqArgs {
-            idx: Idx::Voice(voice.idx),
+            idx: owner,
             tempo,
             period,
             steps,
@@ -1371,10 +1440,7 @@ impl CmdProcessor {
 
     fn get_idx(&mut self, ty: String, name: String) -> StateResult<Idx> {
         match ty.as_str() {
-            "-v" | "--voice" => {
-                let v = self.find_voice(name)?;
-                Ok(Idx::Voice(v.idx))
-            }
+            "-v" | "--voice" => self.find_voice_idx(name),
             "-g" | "--group" => {
                 let g = self.find_group(name)?;
                 Ok(Idx::Group(g.idx))
@@ -1439,6 +1505,18 @@ impl CmdProcessor {
                     });
                 }
             }
+        }
+    }
+
+    // engine Idx of a Voice named "voice" or "group.voice"
+    fn find_voice_idx(&mut self, name: String) -> StateResult<Idx> {
+        let v_idx = self.find_voice(name.clone())?.idx;
+        match name.split_once('.') {
+            Some((group, _)) => {
+                let g_idx = self.find_group(group.to_string())?.idx;
+                Ok(Idx::GroupVoice(g_idx, v_idx))
+            }
+            None => Ok(Idx::Voice(v_idx)),
         }
     }
 
@@ -1557,6 +1635,544 @@ impl fmt::Display for CmdErr {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::audio_processing::test_util::track;
+
+    fn processor(names: &[&str]) -> CmdProcessor {
+        let files = names.iter().map(|n| track(n, 1, 16)).collect();
+        CmdProcessor::new(EngineState::new(files, 2))
+    }
+
+    fn ok(cp: &mut CmdProcessor, cmd: &str) -> Command {
+        match cp.parse(cmd.to_string()) {
+            Ok(command) => command,
+            Err(error) => panic!("'{}' failed: {}", cmd, error),
+        }
+    }
+
+    fn err(cp: &mut CmdProcessor, cmd: &str) -> CmdErr {
+        match cp.parse(cmd.to_string()) {
+            Ok(_) => panic!("'{}' should have failed", cmd),
+            Err(error) => error,
+        }
+    }
+
+    fn seq_tempo(cmd: Command) -> TempoRepr {
+        match cmd {
+            Command::Seq(args) => args.tempo,
+            _ => panic!("not a Seq"),
+        }
+    }
+
+    fn load_tempo(cmd: Command) -> TempoRepr {
+        match cmd {
+            Command::Load(args) => args.tempo_repr,
+            _ => panic!("not a Load"),
+        }
+    }
+
+    fn v_idx(cp: &CmdProcessor, name: &str) -> usize {
+        cp.engine_state.voices.get(name).unwrap().idx
+    }
+
+    // load / unload
+
+    #[test]
+    fn load_assigns_increasing_indices() {
+        let mut cp = processor(&["kick", "snare"]);
+        let t = load_tempo(ok(&mut cp, "load kick"));
+        assert!(t.owned);
+        assert_eq!(t.mode, TempoMode::TBD);
+
+        let t = load_tempo(ok(&mut cp, "load snare -t b:120"));
+        assert!(t.owned);
+        assert_eq!(t.mode, TempoMode::Voice);
+        assert_eq!(t.unit, TempoUnit::Bpm);
+        assert_eq!(t.interval, 120.0);
+
+        assert_eq!(v_idx(&cp, "kick"), 0);
+        assert_eq!(v_idx(&cp, "snare"), 1);
+    }
+
+    #[test]
+    fn load_errors() {
+        let mut cp = processor(&["kick"]);
+        assert!(matches!(err(&mut cp, "load nope"), CmdErr::NoItem { .. }));
+        assert!(matches!(err(&mut cp, "load kick -t x:1"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(err(&mut cp, "load kick -t c:nope"), CmdErr::NoItem { .. }));
+        assert!(matches!(err(&mut cp, "load kick -t g:nope"), CmdErr::NoItem { .. }));
+        assert!(cp.engine_state.voices.is_empty());
+        ok(&mut cp, "load kick");
+        assert!(matches!(err(&mut cp, "load kick"), CmdErr::AlreadyIs { .. }));
+    }
+
+    #[test]
+    fn unload_shifts_later_indices() {
+        let mut cp = processor(&["a", "b", "c"]);
+        ok(&mut cp, "load a");
+        ok(&mut cp, "load b");
+        ok(&mut cp, "load c");
+        match ok(&mut cp, "unload a") {
+            Command::Unload(args) => assert_eq!(args.idx, 0),
+            _ => panic!("not an Unload"),
+        }
+        assert!(cp.engine_state.voices.get("a").is_none());
+        assert_eq!(v_idx(&cp, "b"), 0);
+        assert_eq!(v_idx(&cp, "c"), 1);
+        assert!(matches!(err(&mut cp, "unload a"), CmdErr::NoVoice { .. }));
+    }
+
+    // tempo references (B15)
+
+    #[test]
+    fn seq_voice_tempo_points_at_its_voice() {
+        let mut cp = processor(&["kick", "snare"]);
+        ok(&mut cp, "load kick");
+        ok(&mut cp, "load snare -t b:120");
+        let t = seq_tempo(ok(&mut cp, "seq snare -t v -s 0"));
+        assert!(!t.owned);
+        assert_eq!(t.mode, TempoMode::Voice);
+        assert_eq!(t.idx, v_idx(&cp, "snare"));
+        assert_eq!(t.idx, 1);
+    }
+
+    #[test]
+    fn seq_voice_tempo_follows_index_shift() {
+        let mut cp = processor(&["kick", "snare"]);
+        ok(&mut cp, "load kick");
+        ok(&mut cp, "load snare -t b:120");
+        ok(&mut cp, "unload kick");
+        let t = seq_tempo(ok(&mut cp, "seq snare -t v -s 0"));
+        assert_eq!(t.idx, 0);
+    }
+
+    #[test]
+    fn seq_tbd_voice_tempo_points_at_its_voice() {
+        let mut cp = processor(&["kick", "snare"]);
+        ok(&mut cp, "load kick");
+        ok(&mut cp, "load snare");
+        let t = seq_tempo(ok(&mut cp, "seq snare -t v -s 0"));
+        assert!(!t.owned);
+        assert_eq!(t.mode, TempoMode::TBD);
+        assert_eq!(t.idx, 1);
+    }
+
+    #[test]
+    fn seq_context_tempo_points_at_context() {
+        let mut cp = processor(&["a"]);
+        ok(&mut cp, "tc c1 b:120");
+        ok(&mut cp, "tc c2 b:90");
+        ok(&mut cp, "load a");
+        let t = seq_tempo(ok(&mut cp, "seq a -t c:c2 -s 0"));
+        assert!(!t.owned);
+        assert_eq!(t.mode, TempoMode::Context);
+        assert_eq!(t.idx, 1);
+    }
+
+    #[test]
+    fn group_tempo_refs_point_at_their_group() {
+        let mut cp = processor(&["a", "b", "c", "d"]);
+        ok(&mut cp, "load a");
+        ok(&mut cp, "load b");
+        ok(&mut cp, "load c");
+        ok(&mut cp, "group g1 -v a");
+        ok(&mut cp, "group g2 -v b");
+
+        let t = seq_tempo(ok(&mut cp, "seq c -t g:g2 -s 0"));
+        assert!(!t.owned);
+        assert_eq!(t.mode, TempoMode::Group);
+        assert_eq!(t.idx, 1);
+
+        let t = load_tempo(ok(&mut cp, "load d -t g:g1"));
+        assert!(!t.owned);
+        assert_eq!(t.mode, TempoMode::Group);
+        assert_eq!(t.idx, 0);
+    }
+
+    // grouping
+
+    fn group_args(cmd: Command) -> GroupArgs {
+        match cmd {
+            Command::Group(args) => args,
+            _ => panic!("not a Group"),
+        }
+    }
+
+    fn gv_idx(cp: &CmdProcessor, group: &str, voice: &str) -> usize {
+        cp.engine_state.groups.get(group).unwrap().voices.get(voice).unwrap().idx
+    }
+
+    #[test]
+    fn group_voice_order_matches_command_line() {
+        let mut cp = processor(&["a", "b", "c"]);
+        ok(&mut cp, "load a");
+        ok(&mut cp, "load b");
+        ok(&mut cp, "load c");
+        let args = group_args(ok(&mut cp, "group g -v c,a"));
+
+        // in-group order is c, a
+        assert_eq!(gv_idx(&cp, "g", "c"), 0);
+        assert_eq!(gv_idx(&cp, "g", "a"), 1);
+        // GroupArgs entries are in that same order, holding original idx
+        let ids: Vec<usize> = args.vs_fs_ps.iter().map(|(i, _, _)| *i).collect();
+        assert_eq!(ids, vec![2, 0]);
+        // remaining top-level voice shifted down
+        assert_eq!(v_idx(&cp, "b"), 0);
+        assert!(cp.engine_state.voices.get("a").is_none());
+        assert_eq!(cp.engine_state.groups.get("g").unwrap().idx, 0);
+    }
+
+    // addressing grouped voices (B04)
+
+    fn grouped(names: &[&str], group: &str) -> CmdProcessor {
+        let mut cp = processor(names);
+        for n in names {
+            ok(&mut cp, &format!("load {}", n));
+        }
+        ok(&mut cp, group);
+        cp
+    }
+
+    #[test]
+    fn velocity_targets_group_voice() {
+        let mut cp = grouped(&["a", "b", "c"], "group g -v a,b");
+        match ok(&mut cp, "velocity g.b 2") {
+            Command::Velocity(args) => {
+                assert_eq!(args.idx, Idx::GroupVoice(0, 1));
+                assert_eq!(args.val, 2.0);
+            }
+            _ => panic!("not a Velocity"),
+        }
+        match ok(&mut cp, "velocity c -1.5") {
+            Command::Velocity(args) => {
+                assert_eq!(args.idx, Idx::Voice(0));
+                assert_eq!(args.val, -1.5);
+            }
+            _ => panic!("not a Velocity"),
+        }
+        assert!(matches!(err(&mut cp, "velocity c"), CmdErr::MissingArg { .. }));
+        assert!(matches!(err(&mut cp, "velocity c x"), CmdErr::InvalidArg { .. }));
+    }
+
+    #[test]
+    fn start_targets_group_voice() {
+        let mut cp = grouped(&["a", "b"], "group g -v a,b");
+        for (cmd, want) in [
+            ("start -v g.a", Idx::GroupVoice(0, 0)),
+            ("pause -v g.b", Idx::GroupVoice(0, 1)),
+            ("start -g g", Idx::Group(0)),
+        ] {
+            let idx = match ok(&mut cp, cmd) {
+                Command::Start(args) => args.idx,
+                Command::Pause(args) => args.idx,
+                _ => panic!("unexpected Command"),
+            };
+            assert_eq!(idx, want, "{}", cmd);
+        }
+    }
+
+    #[test]
+    fn missing_group_voice_errors() {
+        let mut cp = grouped(&["a"], "group g -v a");
+        match err(&mut cp, "start -v g.zzz") {
+            CmdErr::NoVoice { name, group } => {
+                assert_eq!(name, "zzz");
+                assert_eq!(group, Some("g".to_string()));
+            }
+            other => panic!("wrong error {:?}", other),
+        }
+        assert!(matches!(err(&mut cp, "start -v nope.a"), CmdErr::NoItem { .. }));
+        assert!(matches!(err(&mut cp, "start -v a"), CmdErr::NoVoice { group: None, .. }));
+        assert!(matches!(err(&mut cp, "start -v g.a.b"), CmdErr::Formatting { .. }));
+    }
+
+    #[test]
+    fn seq_targets_group_voice() {
+        let mut cp = grouped(&["a", "b"], "group g -v a,b");
+        match ok(&mut cp, "seq g.b -s 0") {
+            Command::Seq(args) => assert_eq!(args.idx, Idx::GroupVoice(0, 1)),
+            _ => panic!("not a Seq"),
+        }
+        let gv = cp.engine_state.groups.get("g").unwrap().voices.get("b").unwrap();
+        assert_eq!(gv.processes.len(), 1);
+    }
+
+    // group tempo (B12)
+
+    #[test]
+    fn group_default_tempo_is_owned() {
+        let mut cp = processor(&["a"]);
+        ok(&mut cp, "load a");
+        let args = group_args(ok(&mut cp, "group g -v a"));
+        assert!(args.tempo.owned);
+        assert_eq!(args.tempo.mode, TempoMode::Group);
+        assert_eq!(args.tempo.unit, TempoUnit::Bpm);
+        assert_eq!(args.tempo.interval, 240.0);
+
+        let mut cp = processor(&["a"]);
+        ok(&mut cp, "load a");
+        let args = group_args(ok(&mut cp, "group g -t m:250 -v a"));
+        assert!(args.tempo.owned);
+        assert_eq!(args.tempo.mode, TempoMode::Group);
+        assert_eq!(args.tempo.unit, TempoUnit::Millis);
+        assert_eq!(args.tempo.interval, 250.0);
+    }
+
+    #[test]
+    fn group_shares_named_context() {
+        let mut cp = processor(&["a"]);
+        ok(&mut cp, "tc other b:60");
+        ok(&mut cp, "tc clk b:120");
+        ok(&mut cp, "load a");
+        let args = group_args(ok(&mut cp, "group g -t c:clk -v a"));
+        assert!(!args.tempo.owned);
+        assert_eq!(args.tempo.mode, TempoMode::Context);
+        assert_eq!(args.tempo.idx, 1);
+        // the TBD voice follows the group, i.e. the context
+        let (_, follows, _) = args.vs_fs_ps[0];
+        assert!(follows);
+        let a = cp.engine_state.groups.get("g").unwrap().voices.get("a").unwrap();
+        assert_eq!(a.tempo.mode, TempoMode::Context);
+        assert_eq!(a.tempo.idx, 1);
+    }
+
+    #[test]
+    fn group_tempo_errors() {
+        let mut cp = processor(&["a"]);
+        ok(&mut cp, "tc clk b:120");
+        ok(&mut cp, "load a");
+        assert!(matches!(err(&mut cp, "group g -t c:nope -v a"), CmdErr::NoItem { .. }));
+        assert!(matches!(err(&mut cp, "group g -t c"), CmdErr::MissingArg { .. }));
+        assert!(matches!(err(&mut cp, "group g -t x:1"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(err(&mut cp, "group g -t b"), CmdErr::MissingArg { .. }));
+        assert!(matches!(err(&mut cp, "group g -t b:fast"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(err(&mut cp, "group g -t"), CmdErr::MissingArg { .. }));
+        assert!(matches!(err(&mut cp, "group"), CmdErr::MissingArg { .. }));
+        assert!(matches!(err(&mut cp, "group g -x"), CmdErr::InvalidArg { .. }));
+        assert!(cp.engine_state.groups.is_empty());
+    }
+
+    // flags / process ids stay with their voice (B13)
+
+    const PERMS: [&str; 6] = ["a,b,c", "a,c,b", "b,a,c", "b,c,a", "c,a,b", "c,b,a"];
+
+    #[test]
+    fn group_flags_follow_their_voice() {
+        // HashMap order varies per map, so repeat with fresh processors
+        for _ in 0..20 {
+            for perm in PERMS {
+                let mut cp = processor(&["a", "b", "c"]);
+                ok(&mut cp, "load a");
+                ok(&mut cp, "load b -t b:90");
+                ok(&mut cp, "load c");
+                ok(&mut cp, "seq a -t v -s 0");
+                ok(&mut cp, "seq c -t v -s 0");
+                let args = group_args(ok(&mut cp, &format!("group g -v {}", perm)));
+
+                for (pos, (orig, follows, p_ids)) in args.vs_fs_ps.iter().enumerate() {
+                    // a=0, b=1, c=2
+                    let name = ["a", "b", "c"][*orig];
+                    assert_eq!(*follows, name != "b", "{} in {}", name, perm);
+                    match name {
+                        "b" => assert!(p_ids.is_empty(), "{} in {}", name, perm),
+                        _ => assert_eq!(p_ids, &vec![0], "{} in {}", name, perm),
+                    }
+                    assert_eq!(gv_idx(&cp, "g", name), pos);
+                }
+
+                let g = cp.engine_state.groups.get("g").unwrap();
+                assert_eq!(g.voices.get("a").unwrap().tempo.mode, TempoMode::Group);
+                assert_eq!(g.voices.get("b").unwrap().tempo.mode, TempoMode::Voice);
+                assert_eq!(g.voices.get("c").unwrap().tempo.mode, TempoMode::Group);
+            }
+        }
+    }
+
+    // only voice-following processes move to the group tempo (B14)
+
+    #[test]
+    fn group_keeps_owned_process_tempos() {
+        let mut cp = processor(&["a"]);
+        ok(&mut cp, "load a");
+        ok(&mut cp, "seq a -t b:140 -s 0");
+        let args = group_args(ok(&mut cp, "group g -v a"));
+        let (_, follows, p_ids) = &args.vs_fs_ps[0];
+        assert!(*follows);
+        assert!(p_ids.is_empty());
+        let a = cp.engine_state.groups.get("g").unwrap().voices.get("a").unwrap();
+        let t = a.processes.get("seq").unwrap().tempo.as_ref().unwrap();
+        assert_eq!(t.mode, TempoMode::Process);
+    }
+
+    #[test]
+    fn group_moves_voice_following_processes() {
+        let mut cp = processor(&["a"]);
+        ok(&mut cp, "load a");
+        ok(&mut cp, "seq a -t v -s 0");
+        let args = group_args(ok(&mut cp, "group g -v a"));
+        let (_, _, p_ids) = &args.vs_fs_ps[0];
+        assert_eq!(p_ids, &vec![0]);
+        let a = cp.engine_state.groups.get("g").unwrap().voices.get("a").unwrap();
+        let t = a.processes.get("seq").unwrap().tempo.as_ref().unwrap();
+        assert_eq!(t.mode, TempoMode::Group);
+        assert!(!t.owned);
+        assert_eq!(t.idx, 0);
+    }
+
+    // failed commands don't touch the mirror (B16)
+
+    fn loaded(names: &[&str]) -> CmdProcessor {
+        let mut cp = processor(names);
+        for n in names {
+            ok(&mut cp, &format!("load {}", n));
+        }
+        cp
+    }
+
+    fn assert_untouched(cp: &CmdProcessor, names: &[&str]) {
+        assert!(cp.engine_state.groups.is_empty());
+        assert_eq!(cp.engine_state.voices.len(), names.len());
+        for (i, n) in names.iter().enumerate() {
+            assert_eq!(v_idx(cp, n), i, "{}", n);
+        }
+    }
+
+    #[test]
+    fn failed_group_leaves_mirror_unchanged() {
+        let names = ["a", "b", "c"];
+        for cmd in [
+            "group g -v a,nope",
+            "group g -v nope,b",
+            "group g -v a -t x:1",
+            "group g -v a -t c:nope",
+            "group g -v c -v nope",
+            "group g -v a,a",
+            "group g -v a -v a",
+            "group g -v b -x",
+            "group g -v",
+        ] {
+            let mut cp = loaded(&names);
+            err(&mut cp, cmd);
+            assert_untouched(&cp, &names);
+        }
+    }
+
+    #[test]
+    fn group_unknown_voice_is_no_voice() {
+        let mut cp = loaded(&["a"]);
+        match err(&mut cp, "group g -v a,nope") {
+            CmdErr::NoVoice { name, group } => {
+                assert_eq!(name, "nope");
+                assert_eq!(group, None);
+            }
+            other => panic!("wrong error {:?}", other),
+        }
+    }
+
+    #[test]
+    fn group_with_several_voice_flags() {
+        let mut cp = loaded(&["a", "b", "c", "d"]);
+        let args = group_args(ok(&mut cp, "group g -v c -v a"));
+        let ids: Vec<usize> = args.vs_fs_ps.iter().map(|(i, _, _)| *i).collect();
+        assert_eq!(ids, vec![2, 0]);
+        assert_eq!(gv_idx(&cp, "g", "c"), 0);
+        assert_eq!(gv_idx(&cp, "g", "a"), 1);
+        assert_eq!(v_idx(&cp, "b"), 0);
+        assert_eq!(v_idx(&cp, "d"), 1);
+    }
+
+    #[test]
+    fn full_queue_leaves_mirror_unchanged() {
+        let mut cp = processor(&["a"]);
+        let queue = CmdQueue::new(2); // holds one Command
+        assert!(!queue.is_full());
+
+        cp.submit("tc clk b:120".to_string(), &queue).unwrap();
+        assert!(queue.is_full());
+
+        assert!(cp.submit("load a".to_string(), &queue).is_err());
+        assert!(cp.engine_state.voices.is_empty());
+
+        assert!(queue.try_pop().is_some());
+        assert!(!queue.is_full());
+        cp.submit("load a".to_string(), &queue).unwrap();
+        assert_eq!(v_idx(&cp, "a"), 0);
+        assert!(matches!(queue.try_pop(), Some(Command::Load(_))));
+        assert!(queue.try_pop().is_none());
+    }
+
+    #[test]
+    fn submit_reports_parse_errors() {
+        let mut cp = processor(&["a"]);
+        let queue = CmdQueue::new(4);
+        let error = cp.submit("load nope".to_string(), &queue).unwrap_err();
+        assert!(error.contains("nope"));
+        assert!(queue.try_pop().is_none());
+    }
+
+    // duplicate names (B17)
+
+    fn tc_tempo(cmd: Command) -> TempoRepr {
+        match cmd {
+            Command::Tc(args) => args.tempo,
+            _ => panic!("not a Tc"),
+        }
+    }
+
+    #[test]
+    fn tc_parses_tempo() {
+        let mut cp = processor(&[]);
+        let t = tc_tempo(ok(&mut cp, "tc a b:120"));
+        assert!(t.owned);
+        assert_eq!(t.mode, TempoMode::Context);
+        assert_eq!(t.unit, TempoUnit::Bpm);
+        assert_eq!(t.interval, 120.0);
+        assert_eq!(t.idx, 0);
+        let t = tc_tempo(ok(&mut cp, "tempocon b m:500"));
+        assert_eq!(t.unit, TempoUnit::Millis);
+        assert_eq!(t.idx, 1);
+
+        assert!(matches!(err(&mut cp, "tc"), CmdErr::MissingArg { .. }));
+        assert!(matches!(err(&mut cp, "tc c"), CmdErr::MissingArg { .. }));
+        assert!(matches!(err(&mut cp, "tc c b"), CmdErr::TempoFormatting { .. }));
+        assert!(matches!(err(&mut cp, "tc c x:1"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(err(&mut cp, "tc c b:fast"), CmdErr::InvalidArg { .. }));
+        assert_eq!(cp.engine_state.tempo_cons.len(), 2);
+    }
+
+    #[test]
+    fn duplicate_tc_is_rejected() {
+        let mut cp = processor(&[]);
+        ok(&mut cp, "tc a b:120");
+        assert!(matches!(err(&mut cp, "tc a b:90"), CmdErr::AlreadyIs { .. }));
+        let a = cp.engine_state.tempo_cons.get("a").unwrap();
+        assert_eq!(a.interval, 120.0);
+        assert_eq!(cp.engine_state.tempo_cons.len(), 1);
+
+        // later contexts get their engine Vec position
+        let t = tc_tempo(ok(&mut cp, "tc b b:60"));
+        assert_eq!(t.idx, 1);
+        assert_eq!(cp.engine_state.tempo_cons.get("b").unwrap().idx, 1);
+    }
+
+    #[test]
+    fn duplicate_group_is_rejected() {
+        let mut cp = loaded(&["a", "b", "c"]);
+        ok(&mut cp, "group g -v a");
+        assert!(matches!(err(&mut cp, "group g -v b"), CmdErr::AlreadyIs { .. }));
+        // b wasn't consumed
+        assert_eq!(v_idx(&cp, "b"), 0);
+        assert_eq!(v_idx(&cp, "c"), 1);
+        assert_eq!(cp.engine_state.groups.len(), 1);
+        assert!(cp.engine_state.groups.get("g").unwrap().voices.contains_key("a"));
+
+        ok(&mut cp, "group h -v b");
+        assert_eq!(cp.engine_state.groups.get("h").unwrap().idx, 1);
+    }
+}
+
+#[cfg(test)]
+mod seq_tests {
     use super::*;
 
     fn processor() -> CmdProcessor {
