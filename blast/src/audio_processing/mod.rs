@@ -4,3 +4,4 @@ pub mod blast_time;
 pub mod processes;
 pub mod runtime;
 pub mod blast_rand;
+#[cfg(test)] pub mod test_util;
