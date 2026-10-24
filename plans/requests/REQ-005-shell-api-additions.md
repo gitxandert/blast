@@ -4,7 +4,7 @@ type: architecture
 from: planner (PF-shell-repl, SH)
 tasks: [SHb, REPLb]
 blocks: [SHb]
-status: open
+status: awaiting-user
 created: 2026-10-24
 ---
 
@@ -50,5 +50,19 @@ Only SH and REPL use these. Option 2 changes the §3.7 enum and moves file
 reading and source-depth/cycle handling into REPLb.
 
 ## Architect review
+**Architect, 2026-10-24: design approved: option 1, with two amendments.
+Full text: [`design/REQ-005.md`](../design/REQ-005.md).**
+
+The amendments:
+1. Split `names()` into `var_names()` and `fn_names()`. REPLb's completion
+   needs variables and functions separately, which a mixed list can't give.
+2. `source` takes `&Path` (REPL's `Options.script` is a `PathBuf`).
+
+`source` expanded inside the shell through a loader is the right place for
+nesting limits, cycle detection and error locations. Option 2 would change
+the §3.7 enum for no gain.
+
+On approval, I replace the §3.7 code block with the text in the design.
+SHb and REPLb then get editorial renames.
 
 ## Decision

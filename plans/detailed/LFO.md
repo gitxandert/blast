@@ -95,7 +95,8 @@ that visits every member (REQ-019).
    lfo <owner> <target> -d <depth> [-w sine|tri|square|saw|sh] [-o <offset>]
        [-f <hz> | -t <tempo> [-p <steps>]] [--phase <0..1>] [--seed <u64>] [-n <name>]
    ```
-   - `<owner>` uses PRC's voice/group target syntax.
+   - `<owner>` uses PRC's owner syntax: a voice name (`v`, `g.v`), or
+     `-g <group>` as the first token, as `seq -g` does (PRCb, REQ-020).
    - `<target>` goes through `parse_mod_target` (`gain`, `pan`, `pitch`,
      `start`, `fx0.cutoff`, …).
    - `-d` is required, because no default depth fits every parameter. It may
@@ -112,7 +113,11 @@ that visits every member (REQ-019).
      helpers exactly as `seq` does. A parse failure leaves the mirror
      untouched.
    - `HELP` rows.
-5. Run `cargo fmt`, `cargo clippy` and `cargo test`.
+5. **`set_enabled(on)`** (PRCb's `processes!` dispatch method): while off,
+   `process`/`process_group` write no modulation; turning on keeps the phase
+   (synced phase is a function of the tempo anyway).
+   Test: `disabled_lfo_writes_nothing`.
+6. Run `cargo fmt`, `cargo clippy` and `cargo test`.
 
 ## Tests
 `processes/lfo.rs` (unit tests on `Lfo` with a hand-built `TempoState` and
@@ -164,3 +169,4 @@ M: one small DSP struct plus a parser that mostly reuses PRC's helpers.
 
 ## Changelog
 - 2026-10-24: first draft.
+- 2026-10-24: implements PRCb's `set_enabled` dispatch method (PRCb registry entry 4); owner syntax follows PRCb's `-g <group>` form (REQ-020).

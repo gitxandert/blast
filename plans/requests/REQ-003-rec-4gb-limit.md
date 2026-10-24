@@ -4,7 +4,7 @@ type: question
 from: planner (PJ-recording, REC)
 tasks: [RECa]
 blocks: []
-status: open
+status: awaiting-user
 created: 2026-10-24
 ---
 
@@ -33,5 +33,17 @@ User-visible behaviour of long takes only. RECa's `split_at_size_limit` test
 changes with the choice. No other task affected.
 
 ## Architect review
+**Architect, 2026-10-24: I agree with option 1 (split into numbered files).**
+
+The cap of `u32::MAX - 4096` data bytes is correct for hound's `u32`
+counter. It leaves room for the largest header hound writes
+(WAVE_FORMAT_EXTENSIBLE), so the RIFF size can't overflow either.
+
+Option 3's 2 GiB cap isn't worth it. Every reader in this project (symphonia,
+hound, ffmpeg) treats the size as unsigned, and halving the cap only doubles
+the file count.
+
+No architecture impact: it lives in RECa's writer only. It's user-visible
+behaviour, so the user decides.
 
 ## Decision

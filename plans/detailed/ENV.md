@@ -98,6 +98,8 @@ start fade mechanics (VOXb), and PRC's owner, naming and insert helpers
    env <owner> adsr <attack> <decay> <sustain> <release> [<hold>]   hold default: until the next trigger
        [--to <target>] [--depth <d>] [--mul | --add] [--exp] [-n <name>]
    ```
+   - `<owner>`: a voice name, or `-g <group>` as the first token, as
+     `seq -g` does (PRCb, REQ-020).
    - Times use `parse_time_secs` (`5ms`, `0.2s`, `0.2`). They're converted to
      frames here with `sample_rate::get()`, saturating at `u32::MAX - 1`.
    - `--to` goes through `parse_mod_target`.
@@ -109,7 +111,11 @@ start fade mechanics (VOXb), and PRC's owner, naming and insert helpers
    `Command::SetParam(SetParamArgs { voice, param: FadeIn | FadeOut, value: secs })`.
    `fade <v> in|out off` sets 0. The mechanics (a fade-in on `start`, a fade-out
    that defers `stop`/`pause`) are VOXb's.
-6. `HELP` rows for `env` and `fade`. Run `cargo fmt`, `cargo clippy` and
+6. **`set_enabled(on)`** (PRCb's `processes!` dispatch method): while off,
+   `process` writes no modulation (the voice plays at its base gain); turning
+   on sets `seen = None` and stage Idle, so the next trigger fires cleanly.
+   Test: `disabled_env_writes_nothing`.
+7. `HELP` rows for `env` and `fade`. Run `cargo fmt`, `cargo clippy` and
    `cargo test`.
 
 ## Tests
@@ -161,3 +167,4 @@ M: one state machine plus two small parsers.
 
 ## Changelog
 - 2026-10-24: first draft.
+- 2026-10-24: implements PRCb's `set_enabled` dispatch method (PRCb registry entry 4); owner syntax follows PRCb's `-g <group>` form (REQ-020).

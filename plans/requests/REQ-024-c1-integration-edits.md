@@ -4,7 +4,7 @@ type: question
 from: planner (PA-core, C1)
 tasks: [C1]
 blocks: [C1]
-status: open
+status: awaiting-user
 created: 2026-10-24
 ---
 
@@ -45,5 +45,29 @@ architect drops that commit and replays it. If option 3 is chosen, steps 2 and
 7 of the plan change.
 
 ## Architect review
+**Architect, 2026-10-24: option 1.**
+
+C1 makes the call-site edits itself, in one commit
+(`integration: call-site edits for C1`) that touches only the lines listed in
+`detailed/C1.md` "Registry entries", plus the `Parsed` imports. At merge I
+check that `git diff integrate/wave-1...task/C1 -- ':!blast/src/audio_processing/commands'`
+contains exactly those edits. Anything more is an ownership violation, and the
+branch goes back to the planner.
+
+Reasons:
+- The branch builds and tests green on its own, so the planner reviews what
+  actually merges.
+- Option 2 gives the same end state, but the planner would review a branch
+  that doesn't build.
+- Option 3 defers the §3.5 API that E1 and the wave-3 plans are built on.
+
+This is a one-off exception to the README §2 ownership rule, for call sites
+that a signature change forces. No other wave-1 task owns those files (F1 owns
+only `file_parsing/**`), so they can't conflict. The user ratifies it by
+approving C1's plan.
+
+Current lines on `integrate/wave-1` @ `2f97859`: `runtime.rs:127`,
+`test_util.rs:60`, `processes.rs:214`, `engine.rs:1424, 1444, 1449, 1499`.
+C1.md cites the engine lines from before step 0, which are 12 lower.
 
 ## Decision

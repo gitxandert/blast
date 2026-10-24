@@ -151,7 +151,7 @@ approve. Implementers never make such changes on their own.
 
 | Task | Owns |
 |---|---|
-| **F1** decode-adapter | `file_parsing/**` except `load_assets` (it keeps working unchanged) |
+| **F1** decode-adapter | `file_parsing/**` except `load_assets` (LOAD's; F1 changes only its decoder dispatch to call `decode_file`, and its signature and behaviour stay) |
 | **C1** commands-split | `commands.rs` becomes `commands/**` |
 
 ### Wave 2: engine rework, loading, shell core (3 tasks)

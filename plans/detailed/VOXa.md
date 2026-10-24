@@ -61,10 +61,10 @@ Added by the architect in the wave-3 scaffold, as compiling stubs:
        pub fn set_param(&mut self, p: VoiceParam, v: f32) { /* stub: Gain → self.gain, Rate → self.velocity, else nothing */ }
        pub fn get_param(&self, p: VoiceParam) -> f32 { /* stub: Gain → self.gain, Rate → self.velocity, else 0.0 */ }
        pub fn modulate(&mut self, t: ModTarget, op: ModOp) {}
-       pub fn retrigger(&mut self) { /* today's body of processes.rs:181-186 */ }
+       pub fn retrigger(&mut self) { /* today's body of processes.rs:166-171 */ }
    }
    ```
-2. **`processes/…`: `retrigger(voice)`** (today `processes.rs:181-186`; after
+2. **`processes/…`: `retrigger(voice)`** (today `processes.rs:166-171`; after
    E1 wherever it lands) becomes `voice.retrigger()` (a one-line body change,
    so PRC's edits to `processes/seq.rs` don't collide with VOX).
 3. **`commands/mod.rs`: Command variants** `SetParam(SetParamArgs)` and
@@ -329,3 +329,4 @@ session.
 
 ## Changelog
 - 2026-10-24: first draft.
+- 2026-10-24: `retrigger` line reference corrected to `processes.rs:166-171` (editorial).

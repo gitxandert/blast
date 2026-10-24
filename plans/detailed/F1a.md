@@ -114,8 +114,12 @@ there is no `enable_gapless` on `FormatOptions` any more),
 
 ## Steps
 1. **Types.** In `decode_helpers.rs`, delete `pcm_to_i16`, `float_to_i16`
-   and their tests (`decode_helpers.rs:62-146`; F1b rewrites the converters
-   for raw/AU in `pcm.rs` with their own tests). Keep `file_stem` for now
+   and their tests (`decode_helpers.rs:62-146` on `dev`; on
+   `integrate/wave-1` @ `2f97859` they are at `:76-245`; F1b rewrites the
+   converters for raw/AU in `pcm.rs` with their own tests). Scaffold step 0
+   also added `i16_to_f32` (`:50`, used only by `wav.rs`/`aiff.rs`: delete
+   it with them) and the `#[cfg(test)]` `f32_to_i16` (`:56`, used by the
+   `mod.rs` load tests: move it into `test_bytes.rs`). Keep `file_stem` for now
    (step 6 moves it). Add `channel_layout` if step 0 hasn't, a hand-written
    `Display` and `impl std::error::Error` for `DecodeError`, and `///` docs.
    Add `impl From<symphonia::core::errors::Error> for DecodeError`:
@@ -312,3 +316,4 @@ porting.
 
 ## Changelog
 - 2026-10-24: first draft.
+- 2026-10-24: step 1 line refs for `integrate/wave-1`; scaffold step 0's `i16_to_f32`/`f32_to_i16` handled (editorial).

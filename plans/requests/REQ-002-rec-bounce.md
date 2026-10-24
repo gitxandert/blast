@@ -4,7 +4,7 @@ type: architecture
 from: planner (PJ-recording, REC)
 tasks: [RECc]
 blocks: [RECc]
-status: with-architect
+status: awaiting-user
 created: 2026-10-24
 ---
 
@@ -53,5 +53,18 @@ parse arm and HELP row; RECc runs after RECb in wave 4. (b): reopens E1's
 design. (c): RECc is dropped.
 
 ## Architect review
+**Architect, 2026-10-24: design approved: option (a). Option (b) is rejected.
+Full text: [`design/REQ-002.md`](../design/REQ-002.md).**
+
+(b) costs L–XL across E1/TMP/PRC, and would render a different session from
+the live one. (a) adds nothing architectural beyond REQ-001.
+
+The user-facing trade-off is the user's to accept. During a bounce, live
+output is silent, and afterwards the session has moved N seconds on. If
+that's unwanted, (c) is the fallback, and RECc is withdrawn.
+
+Condition on RECc: bound the per-callback work. Preferably a time budget of
+about 50% of the period, using `Instant::now()`, with `BOUNCE_BLOCKS` as the
+upper bound, so heavy sessions don't xrun every period and flood events.
 
 ## Decision

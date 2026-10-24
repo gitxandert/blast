@@ -4,7 +4,7 @@ type: architecture
 from: planner (PJ-recording, REC)
 tasks: [RECa, RECb, RECc, E1, R1]
 blocks: [RECb, RECc]
-status: with-architect
+status: awaiting-user
 created: 2026-10-24
 ---
 
@@ -66,5 +66,19 @@ Proposed §3.10 text (short form):
   REC mirror field must be `Clone` (`RecRepr` holds `Arc`s; planned that way).
 
 ## Architect review
+**Architect, 2026-10-24: design approved (option 1, with four amendments).
+Full text: [`design/REQ-001.md`](../design/REQ-001.md).**
+
+The amendments:
+1. RECb's last resort is `std::mem::forget` (a bounded leak), never a drop
+   on the audio thread.
+2. No test calls `export::finish_all`, because it is process-global.
+3. `Command` stays move-only (`Send`, not `Clone`/`Debug`).
+4. The sample clock advances only inside `render`.
+
+Once approved, I add §3.10 to README §3 and a sentence to §3.4 (the garbage
+push hands the value back when the queue is full, and payloads may be
+non-`Copy`). I also add the matching E1 and R1 bullets to
+`briefs/PA-core.md`. Exact texts are in the design.
 
 ## Decision

@@ -4,7 +4,7 @@ type: question
 from: planner (PF-shell-repl, SH)
 tasks: [SH, SHa, SHb, REPL]
 blocks: [SHa, SHb]
-status: open
+status: awaiting-user
 created: 2026-10-24
 ---
 
@@ -56,5 +56,31 @@ SHb. D-6 alternative simplifies `Wait` to milliseconds. No other task
 depends on the grammar except REPL (which only consumes `ShellOut`).
 
 ## Architect review
+**Architect, 2026-10-24: conforms. Recommend approving it, with the
+recommended answers to D-1..D-7 and two fixes to the grammar text.**
+
+On the architecture side, the grammar stays inside §3.7. It only produces
+`Line`/`Batch`/`Wait`/`Print` and knows no engine semantics. It starts from
+`notes.txt` plus `let/for/if/fn/source` (§4.2). D-1 keeps every existing
+command's syntax working. D-7 is right (REQ-006).
+
+Fixes, which the planner makes before the user sees the final version:
+1. **Bound the work, not just the output.** "Every script stays finite"
+   isn't enough. `for i in 0..65536 { for j in 0..65536 { let x = 1 } }` emits
+   nothing and runs about 4·10⁹ steps on the REPL thread. Add a
+   statement/iteration budget per `feed`/`source` (e.g. 1 000 000 steps →
+   `StepLimit` error), next to the 100 000-output cap.
+2. **Interactive `else` on the next line.** At the prompt, `feed` runs
+   `if … { … }` as soon as `}` closes it, so an `else` typed on the following
+   line arrives as a stray statement. Specify the rule: at the top level of
+   interactive input, `else` must be on the same line as `}`. Inside an open
+   block and in files, the whole text is parsed at once, so the next line
+   is fine.
+
+Editorial: add the expression keywords `and`, `or`, `not` to the reserved
+words, so `let and = 1` is rejected.
+
+D-3 (`&` as an atomic `Batch`) depends on an atomic batch submit in the
+command layer (REQ-007, not reviewed yet). The grammar itself is unaffected.
 
 ## Decision
