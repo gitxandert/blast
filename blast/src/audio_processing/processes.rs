@@ -74,6 +74,9 @@ impl Seq {
 
         if !tempo.active { return; }
 
+        // nothing to sequence (the parser rejects these anyway)
+        if state.steps.is_empty() || state.period == 0 { return; }
+
         let current = tempo.current() % state.period as f32;
 
         if current == state.steps[state.idx] {
@@ -103,8 +106,9 @@ mod tests {
     use super::*;
 
     use crate::audio_processing::{
-        commands::{CmdProcessor, EngineState},
-        blast_time::sample_rate,
+        commands::{CmdProcessor, EngineState, Command, SeqArgs, StartArgs, TempoRepr, Idx},
+        blast_rand::fast_seed,
+        blast_time::{sample_rate, blast_time::TempoUnit},
         engine::Conductor,
         test_util::{conductor, render},
     };
@@ -172,5 +176,30 @@ mod tests {
         let out = render(&mut c, 1, 5500);
         // frame 0 is the start itself
         assert_eq!(triggers(&out), vec![0, 1000, 3000, 5000]);
+    }
+    #[test]
+    fn seq_with_no_steps_or_period_doesnt_panic() {
+        for (period, steps) in [(4, Vec::new()), (0, vec![0.0])] {
+            let mut c = setup(&["load kick"]);
+            let tempo = TempoRepr {
+                idx: 0,
+                owned: true,
+                mode: TempoMode::Process,
+                unit: TempoUnit::Samples,
+                interval: 100.0,
+            };
+            c.apply(Command::Seq(SeqArgs {
+                idx: Idx::Voice(0),
+                tempo,
+                period,
+                chance: vec![100.0; steps.len()],
+                jit: vec![0.0; steps.len()],
+                steps,
+                rng: X128P::new(fast_seed()),
+            }));
+            c.apply(Command::Start(StartArgs { idx: Idx::Voice(0) }));
+            let out = render(&mut c, 1, 1000);
+            assert_eq!(triggers(&out), vec![0]);
+        }
     }
 }

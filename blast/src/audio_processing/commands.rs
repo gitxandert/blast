@@ -921,6 +921,14 @@ impl CmdProcessor {
                                    cmd: "seq -p".to_string() 
                                })
                         )?;
+
+                    // a period of 0 has no room for steps
+                    if period == 0 {
+                        return Err(CmdErr::InvalidArg {
+                            arg: "0".to_string(),
+                            cmd: "seq -p".to_string(),
+                        });
+                    }
                 }
                 "-s" | "--steps" => {
                     let s_arg = args
@@ -1139,6 +1147,14 @@ impl CmdProcessor {
                 }
                 _ => return Err(CmdErr::InvalidArg { arg: arg.to_owned(), cmd: "seq".to_string() }),
             }
+        }
+
+        // a seq must have steps (no default)
+        if steps.is_empty() {
+            return Err(CmdErr::MissingArg {
+                arg: "-s/--steps".to_string(),
+                cmd: "seq".to_string(),
+            });
         }
 
         // TODO: allow for Idx::Group
@@ -1456,5 +1472,23 @@ mod tests {
         assert!(matches!(seq_err("seq kick -s 0 -z"), CmdErr::InvalidArg { .. }));
         assert!(matches!(seq_err("seq snare -s 0"), CmdErr::NoVoice { .. }));
         assert!(matches!(seq_err("seq"), CmdErr::MissingArg { .. }));
+    }
+    #[test]
+    fn seq_requires_steps() {
+        assert!(matches!(seq_err("seq kick -t b:120"), CmdErr::MissingArg { .. }));
+        assert!(matches!(seq_err("seq kick"), CmdErr::MissingArg { .. }));
+
+        // a rejected seq leaves the mirror untouched
+        let mut cp = processor();
+        assert!(seq(&mut cp, "seq kick -t b:120").is_err());
+        let voice = cp.find_voice("kick".to_string()).unwrap();
+        assert_eq!(voice.processes.len(), 0);
+        assert_eq!(voice.proc_tempi.len(), 0);
+    }
+
+    #[test]
+    fn seq_rejects_zero_period() {
+        assert!(matches!(seq_err("seq kick -p 0 -s 0"), CmdErr::InvalidArg { .. }));
+        assert_eq!(seq_ok("seq kick -p 1 -s 0").period, 1);
     }
 }
