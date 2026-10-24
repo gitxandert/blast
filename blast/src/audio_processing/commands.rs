@@ -600,7 +600,9 @@ impl CmdProcessor {
 
         let mut tempo = TempoRepr::new(0);
         tempo.init(TempoMode::Group, TempoUnit::Bpm, 240.0);
-        let mut voices = HashMap::<String, VoiceRepr>::new();
+        // kept in command-line (Group) order, so that flags and
+        // Process ids below line up with v_ids
+        let mut voices = Vec::<(String, VoiceRepr)>::new();
         // save Voice indices as Voices are collected,
         // since these indices will change when added to voices
         let mut v_ids = Vec::<usize>::new();
@@ -680,7 +682,7 @@ impl CmdProcessor {
                                         v_ids.push(voice.idx);
                                         voice.idx = voices.len(); // assign new index
                                                                   // in Group's Vec
-                                        voices.insert(name, voice);
+                                        voices.push((name, voice));
                                     }
                                     None => return Err(CmdErr::NoVoice { 
                                         name: name, 
@@ -758,7 +760,7 @@ impl CmdProcessor {
             p_ids.push(p_i);
         }
 
-        let group = GroupRepr::new(g_idx, TempoRepr::clone(&tempo), voices);
+        let group = GroupRepr::new(g_idx, TempoRepr::clone(&tempo), voices.into_iter().collect());
 
         self.engine_state.groups.insert(name.to_string(), group);
 
@@ -1713,5 +1715,41 @@ mod tests {
         assert!(matches!(err(&mut cp, "group"), CmdErr::MissingArg { .. }));
         assert!(matches!(err(&mut cp, "group g -x"), CmdErr::InvalidArg { .. }));
         assert!(cp.engine_state.groups.is_empty());
+    }
+
+    // flags / process ids stay with their voice (B13)
+
+    const PERMS: [&str; 6] = ["a,b,c", "a,c,b", "b,a,c", "b,c,a", "c,a,b", "c,b,a"];
+
+    #[test]
+    fn group_flags_follow_their_voice() {
+        // HashMap order varies per map, so repeat with fresh processors
+        for _ in 0..20 {
+            for perm in PERMS {
+                let mut cp = processor(&["a", "b", "c"]);
+                ok(&mut cp, "load a");
+                ok(&mut cp, "load b -t b:90");
+                ok(&mut cp, "load c");
+                ok(&mut cp, "seq a -t v -s 0");
+                ok(&mut cp, "seq c -t v -s 0");
+                let args = group_args(ok(&mut cp, &format!("group g -v {}", perm)));
+
+                for (pos, (orig, follows, p_ids)) in args.vs_fs_ps.iter().enumerate() {
+                    // a=0, b=1, c=2
+                    let name = ["a", "b", "c"][*orig];
+                    assert_eq!(*follows, name != "b", "{} in {}", name, perm);
+                    match name {
+                        "b" => assert!(p_ids.is_empty(), "{} in {}", name, perm),
+                        _ => assert_eq!(p_ids, &vec![0], "{} in {}", name, perm),
+                    }
+                    assert_eq!(gv_idx(&cp, "g", name), pos);
+                }
+
+                let g = cp.engine_state.groups.get("g").unwrap();
+                assert_eq!(g.voices.get("a").unwrap().tempo.mode, TempoMode::Group);
+                assert_eq!(g.voices.get("b").unwrap().tempo.mode, TempoMode::Voice);
+                assert_eq!(g.voices.get("c").unwrap().tempo.mode, TempoMode::Group);
+            }
+        }
     }
 }

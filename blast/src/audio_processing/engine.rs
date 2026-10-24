@@ -795,4 +795,32 @@ mod tests {
         assert!(Rc::ptr_eq(&g.voices[0].state.tempo, &c.tempo_cons[1]));
         assert_eq!(g.state.tempo.borrow().mode, TempoMode::Context);
     }
+
+    // flags / process ids stay with their voice (B13)
+
+    #[test]
+    fn group_tempo_goes_to_the_right_voices() {
+        sample_rate::set(48000);
+        for _ in 0..10 {
+            for perm in ["a,b,c", "b,c,a", "c,a,b", "c,b,a"] {
+                let (mut cp, mut c) = setup(1, vec![
+                    track("a", 1, 16), track("b", 2, 16), track("c", 3, 16),
+                ]);
+                run(&mut cp, &mut c, "load a");
+                run(&mut cp, &mut c, "load b -t b:90");
+                run(&mut cp, &mut c, "load c");
+                run(&mut cp, &mut c, "seq a -t v -s 0");
+                run(&mut cp, &mut c, &format!("group g -v {}", perm));
+
+                let g = &c.groups[0];
+                for v in &g.voices {
+                    let shares = Rc::ptr_eq(&v.state.tempo, &g.state.tempo);
+                    assert_eq!(shares, id(v) != 2, "voice {} in {}", id(v), perm);
+                    if id(v) == 1 {
+                        assert!(Rc::ptr_eq(&seq_tempo(&v.processes[0]), &g.state.tempo));
+                    }
+                }
+            }
+        }
+    }
 }
