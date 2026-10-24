@@ -824,12 +824,15 @@ impl CmdProcessor {
             })?;
         let name = name.to_string();
 
-        // default assign to Process
+        // default assign to Process:
+        // without -t, the seq owns a Process TempoState of 120 BPM
+        // (one step per beat)
         let mut tempo: TempoRepr = {
             // TODO: find object? needs to be more generic
             let voice = self.find_voice(name.clone())?;
             TempoRepr::new(voice.proc_tempi.len())
         };
+        tempo.init(TempoMode::Process, TempoUnit::Bpm, 120f32);
         let mut period: usize = 4;
         let mut steps: Vec<f32> = Vec::new();
         let mut chance: Vec<f32> = Vec::new();
@@ -1370,5 +1373,88 @@ impl fmt::Display for CmdErr {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn processor() -> CmdProcessor {
+        let kick = AudioFile::new("kick", "wav", 48000, 1, 16, vec![0i16; 16]);
+        let mut cp = CmdProcessor::new(EngineState::new(vec![kick], 2));
+        assert!(cp.parse("load kick".to_string()).is_ok());
+        cp
+    }
+
+    fn seq(cp: &mut CmdProcessor, cmd: &str) -> CmdResult<SeqArgs> {
+        match cp.parse(cmd.to_string())? {
+            Command::Seq(args) => Ok(args),
+            _ => panic!("'{}' didn't parse to Command::Seq", cmd),
+        }
+    }
+
+    fn seq_ok(cmd: &str) -> SeqArgs {
+        let mut cp = processor();
+        match seq(&mut cp, cmd) {
+            Ok(args) => args,
+            Err(e) => panic!("'{}' failed: {}", cmd, e),
+        }
+    }
+
+    fn seq_err(cmd: &str) -> CmdErr {
+        let mut cp = processor();
+        match seq(&mut cp, cmd) {
+            Ok(_) => panic!("'{}' should have failed", cmd),
+            Err(e) => e,
+        }
+    }
+
+    #[test]
+    fn seq_default_tempo_is_owned_process() {
+        let args = seq_ok("seq kick -s 0,1");
+        assert!(args.tempo.owned);
+        assert_eq!(args.tempo.mode, TempoMode::Process);
+        assert_eq!(args.tempo.unit, TempoUnit::Bpm);
+        assert_eq!(args.tempo.interval, 120.0);
+    }
+
+    #[test]
+    fn seq_tempo_flag() {
+        let args = seq_ok("seq kick -t m:250 -s 0");
+        assert!(args.tempo.owned);
+        assert_eq!(args.tempo.mode, TempoMode::Process);
+        assert_eq!(args.tempo.unit, TempoUnit::Millis);
+        assert_eq!(args.tempo.interval, 250.0);
+
+        let args = seq_ok("seq kick -t v -s 0");
+        assert!(!args.tempo.owned);
+
+        assert!(matches!(seq_err("seq kick -t x:1 -s 0"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -t b:fast -s 0"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -t b -s 0"), CmdErr::TempoFormatting {}));
+    }
+
+    #[test]
+    fn seq_period_and_steps() {
+        let args = seq_ok("seq kick -p 8 -s 0,1.5,3");
+        assert_eq!(args.period, 8);
+        assert_eq!(args.steps, vec![0.0, 1.5, 3.0]);
+        assert_eq!(args.chance.len(), 3);
+        assert_eq!(args.jit.len(), 3);
+
+        let args = seq_ok("seq kick -s 0");
+        assert_eq!(args.period, 4);
+
+        assert!(matches!(seq_err("seq kick -p x -s 0"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,x"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -s"), CmdErr::MissingArg { .. }));
+    }
+
+    #[test]
+    fn seq_unknown_flag_and_voice() {
+        assert!(matches!(seq_err("seq kick -s 0 -z"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq snare -s 0"), CmdErr::NoVoice { .. }));
+        assert!(matches!(seq_err("seq"), CmdErr::MissingArg { .. }));
     }
 }

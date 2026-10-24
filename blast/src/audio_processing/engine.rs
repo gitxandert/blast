@@ -236,6 +236,12 @@ impl Conductor {
                 let voice: &mut Voice = self.voices.get_mut(v).unwrap();
                 voice.processes.push(Process::Seq(Seq { state }));
                 if args.tempo.mode == TempoMode::Process {
+                    // Voice::start only starts proc_tempi that exist
+                    // at the time, so start this one if the Voice is
+                    // already playing
+                    if voice.state.active {
+                        tempo.borrow_mut().start();
+                    }
                     voice.proc_tempi.push(tempo);
                 }
             }

@@ -97,3 +97,80 @@ impl Seq {
         self.state.tempo = ts;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::audio_processing::{
+        commands::{CmdProcessor, EngineState},
+        blast_time::sample_rate,
+        engine::Conductor,
+        test_util::{conductor, render},
+    };
+    use crate::file_parsing::decode_helpers::AudioFile;
+
+    // mono track whose first sample is -1 and every other is 1,
+    // so a frame renders -1 only when the Voice is (re)triggered
+    const LEN: usize = 400_000;
+
+    fn kick() -> AudioFile {
+        let mut samples = vec![1i16; LEN];
+        samples[0] = -1;
+        AudioFile::new("kick", "wav", 48000, 1, 16, samples)
+    }
+
+    // runs each command through the parser and into the engine;
+    // render at 1 channel so tempos tick once per frame
+    fn setup(cmds: &[&str]) -> Conductor {
+        sample_rate::set(48000);
+        let mut cp = CmdProcessor::new(EngineState::new(vec![kick()], 1));
+        let mut c = conductor(1, vec![kick()]);
+        for cmd in cmds {
+            match cp.parse(cmd.to_string()) {
+                Ok(command) => c.apply(command),
+                Err(e) => panic!("'{}' failed: {}", cmd, e),
+            }
+        }
+        c
+    }
+
+    fn triggers(out: &[i16]) -> Vec<usize> {
+        out.iter()
+            .enumerate()
+            .filter(|(_, s)| **s == -1)
+            .map(|(f, _)| f)
+            .collect()
+    }
+
+    #[test]
+    fn seq_without_tempo_runs() {
+        // default tempo is 120 BPM: one step every 24000 frames
+        let mut c = setup(&["load kick", "seq kick -s 0,1", "start -v kick"]);
+        let out = render(&mut c, 1, 30000);
+        assert_eq!(triggers(&out), vec![0, 24000]);
+    }
+
+    #[test]
+    fn seq_added_to_playing_voice_runs() {
+        let mut c = setup(&["load kick", "start -v kick", "seq kick -s 0,1"]);
+        let out = render(&mut c, 1, 30000);
+        assert_eq!(triggers(&out), vec![0, 24000]);
+    }
+
+    #[test]
+    fn seq_with_own_tempo() {
+        // s:1000 -> one step every 1000 frames, period 4
+        let mut c = setup(&["load kick", "seq kick -t s:1000 -s 0,2", "start -v kick"]);
+        let out = render(&mut c, 1, 8500);
+        assert_eq!(triggers(&out), vec![0, 2000, 4000, 6000, 8000]);
+    }
+
+    #[test]
+    fn seq_with_voice_tempo() {
+        let mut c = setup(&["load kick -t s:1000", "seq kick -t v -p 2 -s 1", "start -v kick"]);
+        let out = render(&mut c, 1, 5500);
+        // frame 0 is the start itself
+        assert_eq!(triggers(&out), vec![0, 1000, 3000, 5000]);
+    }
+}
