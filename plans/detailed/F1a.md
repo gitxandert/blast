@@ -1,5 +1,5 @@
 # F1a: decode adapter (symphonia, decode_file, old parsers deleted)
-Status: draft   ·   Changelog at the bottom
+Status: approved   ·   Changelog at the bottom
 
 F1 is split into two parts that run one after the other in wave 1 and own the
 same files: **F1a** (this plan: the symphonia adapter, the public entry points,
@@ -7,8 +7,15 @@ porting the old tests, deleting the old parsers) and **F1b** (raw PCM, Sun AU,
 the shared PCM converters, fixture smoke tests, speed measurement). F1b starts
 from F1a's merged branch tip (`task/F1a`), not from `integrate/wave-1`.
 
-Line numbers are for `dev` @ `faace53` (before scaffold step 0's `cargo fmt`).
-The implementer re-reads them on the scaffolded `integrate/wave-1`.
+Line numbers are for `integrate/wave-1` @ `2f97859` (after scaffold step 0's
+`cargo fmt`). The implementer re-checks them on the scaffolded branch.
+
+Decided requests (2026-10-24): REQ-031 option 1 (`riff_fixup` pre-pass, with
+the architect's 4 conditions), REQ-032 approved (the architect adds the
+`id3v2` feature while scaffolding), REQ-033 option 1 (AAC end-trim only),
+REQ-034 option 1 (silence fill, sized as in step 2), REQ-035 answered (F1a
+edits only the decoder dispatch in `load_assets`), REQ-036 option 1
+(extension whitelist).
 
 ## Summary
 `file_parsing/` decodes through symphonia 0.6.1 instead of the hand-written
@@ -23,10 +30,10 @@ as adapter tests. `load_assets` keeps its signature and behaviour but calls
 
 ## Ownership
 - **Creates:** `file_parsing/symphonia.rs`, `file_parsing/riff_fixup.rs`
-  (only if REQ-031 option 1 is approved), `file_parsing/test_bytes.rs`
+  (REQ-031), `file_parsing/test_bytes.rs`
   (`#[cfg(test)]` builders), `file_parsing/adapter_tests.rs` (`#[cfg(test)]`).
 - **Modifies:** `file_parsing/mod.rs` (module list, new entry points, the
-  dispatch inside `load_assets` only: see REQ-035), `file_parsing/decode_helpers.rs`
+  decoder dispatch inside `load_assets` only, REQ-035), `file_parsing/decode_helpers.rs`
   (becomes types only).
 - **Deletes:** `file_parsing/wav.rs`, `file_parsing/aiff.rs`,
   `file_parsing/mpeg.rs`.
@@ -37,14 +44,15 @@ as adapter tests. `load_assets` keeps its signature and behaviour but calls
 ## Registry entries
 None. `lib.rs` already declares `pub mod file_parsing;`, and the module list
 inside `file_parsing/mod.rs` is F1's own. `Cargo.toml` gets symphonia in
-scaffold step 0. If REQ-032 (`id3v2` feature) is approved, the architect adds
-`"id3v2"` to symphonia's feature list in `Cargo.toml`; F1 needs no code for it.
+scaffold step 0. The architect adds `"id3v2"` to symphonia's feature list in
+`Cargo.toml` during wave-1 scaffolding (REQ-032); F1 needs no code for it.
 
 ## Architecture changes
-None in §3. Two items touch README §1.1/§3.2 and are filed:
-- REQ-032: add symphonia's `id3v2` feature (no new crates; measured below).
-- REQ-036: `decode_file` sends only whitelisted extensions to symphonia
-  (README §3.2 says "symphonia otherwise").
+None in §3. Two decided items touch README §1.1/§3.2 (the architect updates
+the README):
+- REQ-032 (approved): symphonia's `id3v2` feature (no new crates).
+- REQ-036 (approved): `decode_file` sends only whitelisted extensions to
+  symphonia.
 
 ## Interfaces
 **Provides** (`file_parsing/mod.rs`, re-exported at `file_parsing::`):
@@ -102,12 +110,13 @@ there is no `enable_gapless` on `FormatOptions` any more),
 **Contract issues:**
 - README §3.2: "`decode_file` … to symphonia otherwise." The probe scans up
   to 1 MB for any format marker, so a stray `.png` or `.txt` can be "found"
-  as MP3 frames. Plan: only whitelisted extensions reach symphonia
-  (REQ-036).
+  as MP3 frames. Only whitelisted extensions reach symphonia (REQ-036,
+  approved).
 - README §3.2 says gapless trimming covers MP3 and AAC. Symphonia 0.6.1
   trims MP3 (LAME/Xing tag) but **not** AAC in MP4/ADTS (its own support
   table says ISO/MP4 and AAC are not gapless). Measured: a 66,150-frame
-  source decodes to 67,584 frames from `.m4a` and `.aac`. REQ-033.
+  source decodes to 67,584 frames from `.m4a` and `.aac`. REQ-033
+  (approved, option 1): AAC is end-trimmed only, and README §3.2 says so.
 - `AudioFile.format`: the extension family (`wav`, `aiff`, `flac`, `mp3`,
   `m4a`, `aac`), not symphonia's `short_name` (which says `wave`), so today's
   `"wav"`/`"aiff"` strings and the `load_assets` test stay valid.
@@ -143,25 +152,38 @@ there is no `enable_gapless` on `FormatOptions` any more),
      ends (a truncated last packet; measured on a WAV with `0xFFFFFFFF` sizes);
      other `Err` → return it. Skip packets of other tracks.
    - Decode: `Ok(buf)` → `buf.copy_to_vec_interleaved` into a reused scratch
-     `Vec<f32>`, then `extend_from_slice` onto the output. If the buffer's
-     channel count differs from the track's, return `UnsupportedFormat`.
-     `Err(DecodeError | IoError)` on one packet → apply the corrupt-packet
-     policy (REQ-034; recommended: push `packet.dur` frames of silence, count
-     it, keep going; after the loop, fail with `InvalidData` if more than 10%
-     of packets failed). Any other `Err` → return it.
-   - After the loop: if `track.num_frames == Some(n)` and the output is
-     longer than `n` frames, truncate to `n` (drops AAC end padding; harmless
-     elsewhere because then the lengths already match). Zero frames →
+     `Vec<f32>`, then `extend_from_slice` onto the output; remember the
+     buffer's frame count as `last_frames`. If the buffer's channel count
+     differs from the track's, return `UnsupportedFormat`.
+   - Corrupt packet (REQ-034, approved): `Err(DecodeError | IoError)` on one
+     packet → push silence and keep going, counting the failure. The fill
+     size, because `Packet::dur` is in `TimeBase` units and file-controlled:
+     `last_frames` if a packet has decoded already; else `dur` converted to
+     frames through `track.time_base` (`dur * tb.numer * rate / tb.denom`,
+     in `u64` with `checked_mul`; overflow → 0); else 0. Cap it at
+     `max_frames_per_packet` when the codec parameters give one, and always
+     at one second of frames (`sample_rate`). The fill counts against the
+     same 2^28-sample cap as the output (exceeding it → `InvalidData`).
+     Put the sizing in a small pure function,
+     `fn fill_frames(last_frames: Option<usize>, dur: u64, time_base: Option<TimeBase>, rate: u32, max_per_packet: Option<u64>) -> usize`,
+     so it's unit-tested without a corrupt file.
+     After the loop, fail with `InvalidData` if more than 10% of packets
+     failed. Any other `Err` → return it.
+   - After the loop: truncate the output to
+     `min(decoded, num_frames, riff_fixup limit)` frames, where each bound
+     applies only when known (REQ-033: drops AAC end padding; harmless
+     elsewhere because the lengths already match). A limit can only shorten
+     the output, never lengthen it (REQ-031 condition 2). Zero frames →
      `InvalidData("no audio frames")` (keeps the old "missing SSND is an
      error" behaviour and gives TRK a clean error for empty files).
    - Reserve the output from `num_frames` when it's known and below a sanity
-     cap (e.g. 2^28 samples), so a hostile header can't force a huge
-     allocation up front.
+     cap of 2^28 samples, so a hostile header can't force a huge allocation
+     up front. Decoded output past the cap → `InvalidData`.
    `probe(ext, bytes)`: the same setup, returning `StreamInfo` from the
    track's codec parameters without reading packets.
 3. **Entry points in `mod.rs`.** Replace `pub mod aiff; pub mod mpeg; pub mod
    wav;` (`mod.rs:1-4`) with `pub mod decode_helpers; mod symphonia;`
-   (+ `mod riff_fixup;` after step 5, `#[cfg(test)] mod test_bytes;
+   (+ `mod riff_fixup;` from step 5, `#[cfg(test)] mod test_bytes;
    #[cfg(test)] mod adapter_tests;`). Add `pub use decode_helpers::{AudioFile,
    DecodeError, DecodeResult};`.
    - `const SYMPHONIA_EXTS: &[&str] = &["wav", "wave", "aif", "aiff", "aifc",
@@ -172,29 +194,37 @@ there is no `enable_gapless` on `FormatOptions` any more),
    - `decode_bytes(file_name, bytes)`: extension lowercased from
      `Path::new(file_name).extension()`; unsupported →
      `UnsupportedFormat(format!("'.{ext}' files"))`; else
-     `symphonia::decode`, then set `file_name = track_name(file_name)?`
-     (step 6), `format = format_family(ext)`.
+     `symphonia::decode`, then set
+     `file_name = track_name(Path::new(file_name))?` (step 6),
+     `format = format_family(ext)`.
    - `decode_file(path)`: check the extension **before** reading the file,
      then `fs::read(path)?` and `decode_bytes(<path's file name>, bytes)`.
    - `probe_file(path)`: same dispatch, `symphonia::probe`. It reads the
      whole file for now (simple, and LOAD measures it; see Risks).
-4. **`load_assets` dispatch** (`mod.rs:40-48`, the `match ext.as_str()`).
-   Pending REQ-035 (brief says F1 does this; README ownership says
-   `load_assets` is excluded). Replace the match with: unsupported extension →
+4. **`load_assets` dispatch** (`mod.rs:42-50`, the `match ext.as_str()`).
+   REQ-035 (answered from the brief): F1a may edit only this decoder
+   dispatch. Replace the match with: unsupported extension →
    the existing "unsupported format" message and `continue`; else
    `decode_file(&pathbuf)`. Nothing else in `load_assets` changes: not the
    signature, the sorting, duplicate handling, rate vote, or the
    rate-mismatch filter (LOAD replaces those in wave 2). Remove the
-   `path.rsplit_once` extension code if `Path::extension` replaces it.
-5. **`riff_fixup.rs`** (only if REQ-031 option 1 is approved; otherwise skip
-   and mark the dependent tests `#[ignore]` with a comment naming REQ-031).
+   `path.rsplit_once` extension code (`mod.rs:36-41`) if `Path::extension`
+   replaces it.
+5. **`riff_fixup.rs`** (REQ-031, approved with the architect's conditions).
    `pub(super) fn repair(ext: &str, bytes: Vec<u8>) -> (Vec<u8>, Option<u64>)`
    returns the bytes to hand to symphonia and an optional frame limit.
-   Called from `symphonia::decode`/`probe` before probing. Rules, all
-   bounds-checked with `get(..)` (never index blindly):
-   - **WAV** (`RIFF`…`WAVE`): set the RIFF size to `len - 8` when it
-     disagrees with the file (wrong sizes are common in the wild; symphonia
-     rejects a chunk that runs past the RIFF size). Walk the chunks; clamp a
+   Called from `symphonia::decode`/`probe` before probing. Conditions:
+   bounds-checked throughout with `get(..)` and checked arithmetic (no
+   indexing on file data, no panic); at most one copy of the input, made
+   only when chunks are reordered (size fields are patched in place in the
+   owned `Vec`); the limit is applied only as a `min` (step 2). Rules:
+   - **WAV** (`RIFF`…`WAVE`): wrong sizes are common in the wild, and
+     symphonia rejects a chunk that runs past the RIFF size. Walk the chunks;
+     if the RIFF size ends before the end of the `fmt `/`data` chunks (as
+     present in the file), raise it to cover them (at most `len - 8`). Never
+     shrink a RIFF size that already covers them, and never turn bytes after
+     `data` into audio: a WAV with junk or an `id3 ` chunk after `data` must
+     decode exactly as without them (REQ-031 condition 3). clamp a
      `data` size that runs past the end of the file to the bytes present
      (streamed/unfinalised files with `0xFFFFFFFF`). If `data` precedes
      `fmt `, rebuild the buffer with `fmt ` moved before `data` (the old
@@ -207,16 +237,17 @@ there is no `enable_gapless` on `FormatOptions` any more),
      as the limit (symphonia reads the whole SSND even when COMM declares
      fewer frames).
    - Anything else: unchanged, no limit.
-   `symphonia::decode` truncates the output to `min(limit, num_frames)` frames.
-6. **Track naming.** Move `file_stem` (`decode_helpers.rs:41-47`) to
+   `symphonia::decode` applies the limit in step 2's `min`.
+6. **Track naming.** Move `file_stem` (`decode_helpers.rs:60-71`) to
    `mod.rs` as `pub fn track_name(path: &Path) -> DecodeResult<String>`
    (same rule: the stem, empty is an error). F1b extends it to strip a raw
    spec suffix. LOAD (wave 2) adds the subfolder scheme (REQ-037).
 7. **Test helpers and ported tests.** Create `test_bytes.rs` with the old
    builders, made `pub(super)`: `wav_bytes`, `aiff_bytes` (from
-   `mod.rs:95-129`), and `chunk_le`/`riff`/`fmt_body`/`fmt_ext_body`/
-   `i16_le` (`wav.rs:216-262`), `chunk_be`/`form`/`extended`/`comm_body`/
-   `ssnd_body` (`aiff.rs:210-256`). Point the `mod.rs` load tests at them.
+   `mod.rs:115-151`), and the `wav.rs` builders `chunk`/`riff`/`fmt_body`/
+   `fmt_ext_body` and friends (`wav.rs:244-292`, `chunk` renamed
+   `chunk_le`), the `aiff.rs` builders `chunk`/`form`/`extended`/
+   `comm_body`/`ssnd_body` (`aiff.rs:242-288`, `chunk` renamed `chunk_be`). Point the `mod.rs` load tests at them.
    Write `adapter_tests.rs` (table below) calling `decode_bytes` directly,
    no temp files.
 8. **Delete** `wav.rs`, `aiff.rs`, `mpeg.rs`. `mpeg.rs` has no tests and
@@ -244,26 +275,30 @@ symphonia 0.6.1 in a scratch crate are in the "today" column.
 | `wav_unsupported_formats_are_errors` | `wav::unsupported_formats_are_errors` | all four are errors; f16 now maps to `InvalidData` (symphonia calls it malformed), so assert `is_err()` for that case. Note: A-law/µ-law with an 18-byte `fmt` now **decode** (F1b fixture test); the old 16-byte-fmt A-law and extensible µ-law cases stay errors |
 | `wav_skips_list_chunk` | `wav::skips_list_chunk_between_fmt_and_data` | passes |
 | `wav_odd_chunk_padding` | `wav::honours_pad_byte_of_odd_sized_chunk` | passes |
-| `wav_data_before_fmt` | `wav::data_before_fmt` | **fails** (`missing format chunk`); passes with REQ-031 option 1 |
-| `wav_streamed_data_size` | `wav::streamed_data_size_reads_to_end` (data size `0xFFFFFFFF`, RIFF size valid) | **fails** (`chunk length exceeds parent`); passes with REQ-031 |
+| `wav_data_before_fmt` | `wav::data_before_fmt` | fails plainly (`missing format chunk`); passes with `riff_fixup` |
+| `wav_streamed_data_size` | `wav::streamed_data_size_reads_to_end` (data size `0xFFFFFFFF`, RIFF size valid) | fails plainly (`chunk length exceeds parent`); passes with `riff_fixup` |
 | `wav_streamed_riff_and_data_size` | new: both sizes `0xFFFFFFFF` (what ffmpeg writes to a pipe) | passes |
-| `wav_riff_size_too_small` | new (old parser ignored the RIFF size) | **fails**; passes with REQ-031 |
+| `wav_riff_size_too_small` | new (old parser ignored the RIFF size) | fails plainly; passes with `riff_fixup` |
+| `wav_trailing_bytes_after_riff` | new (REQ-031 condition 3): the `wav_pcm16` bytes plus 37 junk bytes after the RIFF chunk, and plus an `id3 ` chunk after `data` | both decode to exactly the `wav_pcm16` samples |
+| `riff_fixup_limit_only_shortens` | new (REQ-031 condition 2): `fact` and COMM counts larger than the data | output length equals the data's frame count, not the declared one |
 | `wav_wrong_magic` | `wav::wrong_magic_is_invalid` | errors; now `UnsupportedFormat` (no reader matches) instead of `InvalidData`; assert that |
 | `wav_missing_chunks` | `wav::missing_chunks_are_errors` | no `data` → `UnsupportedFormat`; no `fmt ` → `InvalidData`; 4-byte `fmt ` → `InvalidData` |
 | `wav_empty_data_is_no_audio` | new | `InvalidData("no audio frames")` (our check) |
-| `wav_adpcm_fact_trims_padding` | new, synthetic IMA ADPCM block + `fact` | needs REQ-031; else `#[ignore]` |
+| `wav_adpcm_fact_trims_padding` | new, synthetic IMA ADPCM block + `fact` | passes with `riff_fixup` |
 | `aiff_s16`, `aiff_s8`, `aiff_s24`, `aiff_s32` | `aiff::parses_16_bit_aiff`, `converts_*` | pass |
 | `aiff_skips_chunks_before_ssnd` | `aiff::skips_chunks_before_ssnd` | passes |
 | `aiff_ssnd_before_comm` | `aiff::ssnd_before_comm_and_larger_comm` | passes |
 | `aiff_ssnd_offset` | `aiff::ssnd_offset_is_skipped` (both halves) | passes |
-| `aiff_reads_only_num_frames` | `aiff::reads_only_num_frames` | first half **fails** (reads all 3 frames); passes with REQ-031. Second half passes |
+| `aiff_reads_only_num_frames` | `aiff::reads_only_num_frames` | first half fails plainly (reads all 3 frames); passes with `riff_fixup`. Second half passes |
 | `aiff_truncated_is_eof` | `aiff::truncated_file_is_eof` | passes |
 | `aiff_tiny_ssnd_is_error` | `aiff::tiny_ssnd_is_error_not_panic` | passes |
 | `aiff_missing_chunks` | `aiff::missing_chunks_are_errors` | no SSND → our zero-frames `InvalidData`; no/short COMM → `InvalidData` |
 | `aiff_wrong_magic` | `aiff::wrong_magic_is_rejected` | 8SVX and `RIFF…AIFF` → `UnsupportedFormat`; an `AIFC` with an 18-byte COMM → error (assert `is_err()`; real AIFC now decodes, see F1b's `sowt` fixture) |
 | `aiff_unsupported_sample_size` | `aiff::unsupported_sample_size_is_error` | error, now `InvalidData`; assert `is_err()` |
 | `unknown_extension_is_unsupported` | new | `.txt`, `.png`, no extension → `UnsupportedFormat` without probing |
-| `garbage_with_audio_extension_is_error` | new: 1 KiB of `0xFF 0xFB …` noise named `.mp3`, random bytes named `.wav`/`.flac`/`.m4a` | `Err`, no panic |
+| `garbage_with_audio_extension_is_error` | new: 1 KiB of `0xFF 0xFB …` noise named `.mp3`, random bytes named `.wav`/`.flac`/`.m4a` | `Err`, no panic (REQ-034's 10% rule) |
+| `fill_frames_is_bounded` (`symphonia.rs`) | new (REQ-034) | prefers `last_frames`; converts `dur` through a 1/90000 time base correctly; `u64::MAX` `dur` and a zero/absent time base give a bounded result; never above `max_per_packet` or one second of frames |
+| `corrupt_flac_frame_is_filled` | new (REQ-034): F1b's `.fixtures/a.flac` read into memory with one byte flipped in the middle of the stream (skips if the fixture is missing) | `Ok`, same frame count as the intact file |
 | `truncated_prefixes_never_panic` | new: every prefix length 0..len of a valid WAV and AIFF | each returns `Ok` or `Err`, none panics |
 | `track_name_needs_no_directory` (`mod.rs`) | `wav::name_needs_no_directory` | passes |
 | `decodes_real_assets` (`mod.rs`) | `wav::parses_real_assets` (skips without `assets/`) | passes |
@@ -280,29 +315,24 @@ The existing `load_assets` tests in `mod.rs` stay and must pass unchanged
 ## Done when
 - `wav.rs`, `aiff.rs`, `mpeg.rs` and the `pcm_to_*`/`float_to_*` helpers are
   gone; nothing outside `file_parsing/` changed.
-- Every row above exists. Rows marked "fails" pass if REQ-031 option 1 is
-  approved; otherwise they are `#[ignore]`d with the REQ ID, and the user has
-  seen the list.
+- Every row above exists and passes (the "fails plainly" rows pass through
+  `riff_fixup`).
+- The F1 report lists for the user (REQ-031 condition 4) the cases that stay
+  dropped (WAV `fmt ` chunks of non-standard size such as 20 bytes) and the
+  error-kind changes (wrong magic → `UnsupportedFormat`, f16 WAV →
+  `InvalidData`).
 - `load_assets` loads the same four real assets as before, with identical
   frame counts.
 - No `unwrap()`/`expect()`/indexing on file-controlled data in
   `symphonia.rs` or `riff_fixup.rs`.
 
 ## Risks and open questions
-- REQ-031: what to do about cases symphonia rejects that the old parser
-  accepted (recommended: the small `riff_fixup` pre-pass). Steps 5 and the
-  marked tests depend on it.
-- REQ-032: MP3s with a large ID3v2 tag (cover art over 1 MB) fail to probe
-  without symphonia's `id3v2` feature. Measured: a 2.7 MB tagged MP3 fails
-  without it and decodes with it.
-- REQ-033: AAC is not gapless in symphonia 0.6.1. F1a trims the end padding
-  (to `num_frames`) but the 1,024–2,112-frame encoder priming stays.
-- REQ-034: corrupt-packet policy (step 2).
-- REQ-035: F1 edits `load_assets`' dispatch (step 4).
-- REQ-036: extension whitelist (step 3).
+- All F1 requests are decided (see the top). Remaining known limitation:
+  AAC keeps its 1,024–2,112-frame encoder priming (REQ-033); README §3.2
+  documents it.
 - Formats that the old parser accepted and stay dropped even with the
   pre-pass: WAV `fmt ` chunks of non-standard size (e.g. 20 bytes; symphonia
-  accepts 16, 18, 40). Listed in REQ-031.
+  accepts 16, 18, 40). Listed in REQ-031 and in the F1 report.
 - `probe_file` reads the whole file. LOAD measures `scan_assets` on a large
   directory in wave 2; if it's slow, LOAD can switch `probe` to a
   `File`-backed `MediaSourceStream` (no API change).
@@ -317,3 +347,4 @@ porting.
 ## Changelog
 - 2026-10-24: first draft.
 - 2026-10-24: step 1 line refs for `integrate/wave-1`; scaffold step 0's `i16_to_f32`/`f32_to_i16` handled (editorial).
+- 2026-10-24: approved (REQ-043), conditional on the architect's fixes, now applied: REQ-034 silence sizing (step 2, new tests `fill_frames_is_bounded`, `corrupt_flac_frame_is_filled`); REQ-031 conditions (step 5, `min`-only limit, tests `wav_trailing_bytes_after_riff` and `riff_fixup_limit_only_shortens`, report list); `Path::new` in `decode_bytes`; line refs and header moved to 2f97859. Request-dependent branches resolved per the decisions on REQ-031..036. Status → approved.

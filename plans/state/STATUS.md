@@ -42,7 +42,9 @@ Implementation states: none → scaffolded → dispatched → in-review (planner
 | 3 | integrate/wave-3 | no | 0/7 | no |
 | 4 | integrate/wave-4 | no | 0/6 | no |
 
-**User instruction (2026-10-24):** to save usage, run only the architect and planner PB for now; restart other planners one at a time later. PI was stopped mid-edit of VOXa/LFO/ENV and its journal: on respawn, it must check those edits are complete.
+**User instruction (2026-10-24, later):** reduce to 2 agents, architect + PM; the architect writes all remaining plans; the PM handles them one at a time. Who implements: asked the user (pending). No planners or implementers to be started meanwhile.
+
+**User instruction (2026-10-24, earlier):** to save usage, run only the architect and planner PB for now; restart other planners one at a time later. PI was stopped mid-edit of VOXa/LFO/ENV and its journal: on respawn, it must check those edits are complete.
 
 ## User queue (presented one at a time, top first)
 
@@ -58,7 +60,7 @@ FYI for user: architect bumped alsa-sys 0.3.1→0.4.0 to resolve with cpal (READ
 |---|---|---|---|---|
 | architect | Architect | phase 1 reviews: C1, F1a/b, REC, SH + REQ-001..006, 024, 031..036 | 2026-10-24 (resume) | idle; next: merge C1/F1a/F1b when reports say ready |
 | planner-PA | Planner | PA-core: E1 plans, R1 plan, REQ-025..030 | 2026-10-24 (resume) | stopped (user: save usage); respawn later, one at a time |
-| planner-PB | Planner | PB-audio-files: REQ-031..036 first, then LOAD, TRK, REQ-037..041 | 2026-10-24 (resume) | resumed: apply F1a/b fixes, prep F1a dispatch (hold until scaffold) |
+| planner-PB | Planner | PB-audio-files: REQ-031..036 first, then LOAD, TRK, REQ-037..041 | 2026-10-24 (resume) | done (F1a/b fixes applied, Status approved; F1a implementer prompt in its journal, NOT dispatched). Retired: user wants architect + PM only |
 | planner-PF | Planner | PF-shell-repl | n/a | not respawned (planning done; waits for decisions) |
 | planner-PH | Planner | PH-engine-commands: REQ-015..017, INS plan | 2026-10-24 (resume) | stopped (user: save usage); respawn later, one at a time |
 | planner-PI | Planner | PI-voice-dsp: REQ-018..023 | 2026-10-24 (resume) | stopped (user: save usage); respawn later, one at a time |

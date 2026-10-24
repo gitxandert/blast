@@ -1,8 +1,12 @@
 # F1b: raw PCM, Sun AU, fixture smoke tests
-Status: draft   ·   Changelog at the bottom
+Status: approved   ·   Changelog at the bottom
 
 Second part of F1 (see `F1a.md`). Runs after F1a in wave 1, on `task/F1b`
 branched from `task/F1a`'s tip, and owns the same files.
+
+Decided requests (2026-10-24): REQ-031 option 1 (`riff_fixup` trims ADPCM to
+the `fact` count), REQ-033 option 1 (AAC end-trim only), REQ-036 option 1
+(whitelist, which this part extends with `au snd raw pcm`).
 
 ## Summary
 Two small hand-written decoders join the symphonia adapter: headerless PCM
@@ -78,11 +82,13 @@ per-flag overrides (README §4 item 5).
 ## Steps
 1. **`pcm.rs`.** `to_f32` over `chunks_exact(encoding.bytes())`: signed
    integers assembled big- or little-endian into an `i32` (sign-extended for
-   24-bit), divided by `2^(bits-1)` as f32 (f64 for 32-bit, then cast, so
-   `i32::MAX` maps to just under 1.0); floats read with `from_le_bytes`/
+   24-bit), divided by `2^(bits-1)` as f32 (f64 for 32-bit, then cast, as
+   symphonia does; `pcm_matches_symphonia` pins the result); floats read with `from_le_bytes`/
    `from_be_bytes` (f64 cast to f32). No clamping (floats outside ±1 pass
    through; the backend clamps). G.711: the classic `g711.c` expansions,
-   written as two small functions (no 256-entry literal tables needed):
+   written as two small functions (no 256-entry literal tables needed).
+   Widen the byte to `i32` first and do all the arithmetic in `i32`
+   (`<< 3` and `<< seg` overflow `u8`):
    - µ-law: `u = !b; t = (((u & 0x0F) << 3) + 0x84) << ((u >> 4) & 7);`
      result `0x84 - t` if `u & 0x80` else `t - 0x84`.
    - A-law: `a = b ^ 0x55; t = (a & 0x0F) << 4; seg = (a >> 4) & 7;`
@@ -114,9 +120,11 @@ per-flag overrides (README §4 item 5).
    gains `au`, `snd`, `raw`, `pcm`. `track_name` strips a raw spec suffix
    for `.raw`/`.pcm` files (`kick.s16le.48000.2.raw` → `kick`).
 5. **Fixture tests** (`fixture_tests.rs`), see Tests. Fixtures live in
-   `blast/assets/.fixtures/` (gitignored with `assets/`; the leading dot
-   keeps LOAD's recursive scan from treating them as tracks, see
-   `LOAD.md`). A missing fixture makes its test return early, the
+   `blast/assets/.fixtures/` (gitignored with `assets/`). LOAD's recursive
+   scan skips dot-directories (a cross-plan requirement, stated in
+   `LOAD.md` step 4), so fixtures never become tracks. Until LOAD, the
+   flat `load_assets` prints one harmless "unsupported" line for the
+   directory. A missing fixture makes its test return early, the
    `loads_real_assets` pattern.
 6. **Speed.** `#[test] #[ignore] fn decode_speed_long_mp3` decodes
    `.fixtures/long.mp3` and prints the elapsed time. Run with
@@ -187,7 +195,7 @@ test reads them with `raw::decode_with`, not by shelling out.)
 |---|---|
 | `lossless_fixtures_match_source` | `a.flac`, `a_alac.m4a`, `a.aiff`, `a_sowt.aifc`, `a.au`, `a.s16le.44100.2.raw` decode to exactly the samples of `src.wav` (66,150 stereo frames, 44.1 kHz) |
 | `g711_fixtures_match_ffmpeg` | `a_alaw.wav`, `a_mulaw.wav` equal their `.ref.f32` exactly |
-| `adpcm_fixtures_match_ffmpeg` | `a_ima.wav`, `a_ms.wav`: length equals the reference (66,150) if REQ-031 option 1 is in (the `fact` trim), else within one block (≤ 1,017 frames longer); RMS difference to the reference under -60 dB |
+| `adpcm_fixtures_match_ffmpeg` | `a_ima.wav`, `a_ms.wav`: length equals the reference (66,150) exactly, via `riff_fixup`'s `fact` trim (REQ-031); RMS difference to the reference under -60 dB |
 | `mp3_is_gapless` | `a.mp3` decodes to exactly 66,150 frames (measured), RMS of the difference to `a.mp3.ref.f32` under -60 dB |
 | `aac_length_and_level` | `a.m4a`: ≤ 1,024 + 66,150 frames (end padding trimmed to `num_frames`; measured 67,174); `a.aac`: ≤ 67,584; RMS of each within 1% of the reference's RMS. Tolerance documented in a comment citing REQ-033 |
 | `six_channel_layout` | `six.wav`: 6 channels, `channel_layout == Some(0x3F)` (5.1 mask) |
@@ -201,8 +209,8 @@ test reads them with `raw::decode_with`, not by shelling out.)
 - The speed number is in the report.
 
 ## Risks and open questions
-- The lossy-codec tolerances depend on REQ-033 (AAC) and REQ-031 (ADPCM
-  `fact`). The tests are written against whichever option is approved.
+- The lossy-codec tolerances follow the decisions: AAC end-trimmed only
+  (REQ-033), ADPCM exact through `fact` (REQ-031).
 - `amerge` requires the two sines to share a rate; they do. If an older
   ffmpeg lacks a codec (e.g. no `libmp3lame`), that fixture is missing and
   its test skips.
@@ -215,3 +223,4 @@ M: three small modules (~250 lines with tests) plus the fixture suite.
 
 ## Changelog
 - 2026-10-24: first draft.
+- 2026-10-24: approved (REQ-044), conditional on the architect's fixes, now applied: dropped the wrong `i32::MAX` claim; G.711 arithmetic in `i32`; fixture dot-directory note points at LOAD step 4. ADPCM and AAC tolerances fixed per REQ-031/REQ-033. Status → approved.

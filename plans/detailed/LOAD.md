@@ -168,7 +168,10 @@ no planar conversion is needed. With `default-features = false` there is no
 4. **`scan_assets(dir)`.** Iterative walk (explicit stack, depth limit 8,
    so symlinked directory cycles end). `fs::read_dir(dir)?` errors for the
    root only; errors below it are printed and skipped. Skip entries whose
-   name starts with `.` (hidden files, `.fixtures/`, `.DS_Store`). Follow
+   name starts with `.`, files and directories alike, and never descend
+   into a dot-directory (hidden files, `.DS_Store`, and F1b's
+   `assets/.fixtures/`: a cross-plan requirement from the architect's F1b
+   review). Follow
    symlinks via `fs::metadata`. For each file with
    `is_supported_extension`: `probe_file`, then `asset_name`. Unsupported
    extensions are skipped silently in subfolders and with today's message
@@ -255,7 +258,8 @@ no planar conversion is needed. With `default-features = false` there is no
 - `scan_recurses_and_names_by_path`: `kick.wav`, `drums/snare.wav`,
   `drums/909/hat.aif` → names `kick`, `drums/snare`, `drums/909/hat`;
   rates and channels come from the probe.
-- `scan_skips_hidden`: `.fixtures/a.wav`, `.hidden.wav` not listed.
+- `scan_skips_hidden`: `.fixtures/a.wav`, `.git/x/b.wav` and `.hidden.wav`
+  are not listed (dot-directories are never entered).
 - `scan_dedupes_same_folder_stems`: `drums/kick.wav` and `drums/kick.aif`
   → one asset (`.aif` sorts first and wins, as today).
 - `scan_depth_limit`: nesting 10 deep stops at 8 without error.
@@ -304,3 +308,4 @@ mixing matrix are short.
 
 ## Changelog
 - 2026-10-24: first draft.
+- 2026-10-24: `conform()` added for TRK; dot-directories explicitly never scanned (architect's F1b review, cross-plan requirement) (editorial).
