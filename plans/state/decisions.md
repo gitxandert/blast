@@ -52,3 +52,7 @@ Each entry records the date, the decision, and its source (a request ID, or
   task at a time, in worktrees; the architect reviews and merges. Planners,
   implementers and design subagents are retired. (`ORG.md` top note; user via
   phone, options "architect creates all plans" and "A: PM implements".)
+
+## Wave 1 gate (2026-10-24)
+
+- REQ-045: merge integrate/wave-1 @ a652f36 into dev. Approved.

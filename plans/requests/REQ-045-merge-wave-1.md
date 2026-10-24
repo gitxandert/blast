@@ -4,7 +4,7 @@ type: merge
 from: PM
 tasks: [F1a, F1b, C1]
 blocks: [E1, LOAD, SH]
-status: awaiting-user
+status: approved
 created: 2026-10-24
 ---
 
@@ -55,3 +55,5 @@ Nothing is pushed. `master` is untouched.
 Reviewed and merged every task (state/architect.md, "Integration log").
 
 ## Decision
+
+User, 2026-10-24 (via phone): **approved**, merge into dev ("Merge into dev, then tell me what's left to do").
