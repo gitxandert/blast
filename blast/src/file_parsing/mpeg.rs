@@ -1,7 +1,7 @@
 use std::fs::File;
-use std::io::{self, Read, SeekFrom};
+use std::io::{self, Read};
 use std::collections::HashMap;
-use super::decode_helpers::{AudioFile, DecodeResult, DecodeError};
+use super::decode_helpers::{DecodeResult, DecodeError};
 
 // iterate through frames by frame size
 pub fn parse(path: &str) -> DecodeResult<Vec<u8>> {
@@ -15,37 +15,33 @@ pub fn parse(path: &str) -> DecodeResult<Vec<u8>> {
 
     // find any two bytes that look like frame sync
     while cur < file_len {
-        if let b = reader[cur] {
-            if b == 0xFF {
-                if reader[cur + 1] & 0xE0 == 0xE0 {
-                    let fp = cur;
-                    let mut supb: usize = 0;
-                    supb = ((reader[cur] as usize) << 24);
-                    cur += 1;
-                    if cur >= file_len {
-                        break;
-                    }
-                    supb |= ((reader[cur] as usize) << 16);
-                    cur += 1;
-                    if cur >= file_len {
-                        break;
-                    }
-                    supb |= ((reader[cur] as usize) << 8);
-                    cur += 1;
-                    if cur >= file_len {
-                        break;
-                    }
-                    supb |= reader[cur] as usize;
-                    possibles.entry(supb).or_insert(vec![fp]).push(fp);
-                    cur += 1;
-                } else {
-                    cur += 1;
+        let b = reader[cur];
+        if b == 0xFF {
+            if reader[cur + 1] & 0xE0 == 0xE0 {
+                let fp = cur;
+                let mut supb: usize = (reader[cur] as usize) << 24;
+                cur += 1;
+                if cur >= file_len {
+                    break;
                 }
+                supb |= (reader[cur] as usize) << 16;
+                cur += 1;
+                if cur >= file_len {
+                    break;
+                }
+                supb |= (reader[cur] as usize) << 8;
+                cur += 1;
+                if cur >= file_len {
+                    break;
+                }
+                supb |= reader[cur] as usize;
+                possibles.entry(supb).or_insert(vec![fp]).push(fp);
+                cur += 1;
             } else {
                 cur += 1;
             }
         } else {
-            break;
+            cur += 1;
         }
     }
    
@@ -58,19 +54,17 @@ pub fn parse(path: &str) -> DecodeResult<Vec<u8>> {
     });
    
     // get a reference header to validate less common headers
-    let mut refheader: Header = Header::new(); 
     let mut i = 0;
-    loop {
-        let (pos_ref, indices) = vecs[i];
+    let refheader: Header = loop {
+        let (pos_ref, _) = vecs[i];
         match parse_header(pos_ref) {
             Ok((v, l, p, br, sr, pd, cm)) => {
-                refheader = Header::format(v, l, p, br, sr, pd, cm);
-                break;
+                break Header::format(v, l, p, br, sr, pd, cm);
             },
             Err(error) => eprintln!("{:?}", error),
         };
         i += 1;
-    }
+    };
 
     // if a header is valid, compare it to the reference;
     // if matches the reference, get frame length and collect data
@@ -139,18 +133,6 @@ struct Header {
 }
 
 impl Header {
-    fn new() -> Self {
-        Self { 
-            version: 0f32, 
-            layer: 0, 
-            protected: false, 
-            bitrate: 0, 
-            sr: 0f64, 
-            padded: false, 
-            channel_mode: 0 
-        }
-    }
-
     fn format(version: u8, layer: u8, not_protected: u8, bitrate: u32, sr: f64, padded: u8, channel_mode: u8) -> Self {
         let version: f32 = match version {
             0x0 => 2.5f32,
@@ -219,7 +201,7 @@ impl Header {
             return Err(DecodeError::InvalidData(String::from("Frame length too small")));
         }
 
-        let CRC = match protected {
+        let crc = match protected {
             true => 20,
             false => 4,
         };
@@ -230,7 +212,7 @@ impl Header {
         };
 
         // subtract the header and CRC
-        Ok(frame_len as usize - CRC + padding)
+        Ok(frame_len as usize - crc + padding)
     }
 }// end impl Header
 
@@ -270,9 +252,9 @@ static BITRATES: [[u32; 5]; 15] = [
     [0,   0,    0,    0,    0,],
 ];
 
-fn match_bitrate(row: u8, V: &u8, L: &u8) -> u32 {
-    let VL = (V << 2) & L;
-    let col = match VL {
+fn match_bitrate(row: u8, v: &u8, l: &u8) -> u32 {
+    let vl = (v << 2) & l;
+    let col = match vl {
         0xF => 0,
         0xE => 1,
         0xD => 2,
@@ -283,7 +265,7 @@ fn match_bitrate(row: u8, V: &u8, L: &u8) -> u32 {
     BITRATES[row as usize][col]
 }
 
-fn match_sr(FFGH: &u8, v_id: &u8) -> f64 {
+fn match_sr(ffgh: &u8, v_id: &u8) -> f64 {
     let base: f64 = match v_id {
         0x3 => 32000f64,
         0x2 => 16000f64,
@@ -291,8 +273,8 @@ fn match_sr(FFGH: &u8, v_id: &u8) -> f64 {
         _   => 0f64,
     };
 
-    let FF = FFGH >> 2;
-    let sr: f64 = match FF {
+    let ff = ffgh >> 2;
+    let sr: f64 = match ff {
         0x0 => base * 1.378125f64,
         0x1 => base * 1.5f64,
         0x2 => base,
@@ -302,6 +284,8 @@ fn match_sr(FFGH: &u8, v_id: &u8) -> f64 {
     sr
 }
 
+// debugging aid: step the cursor around a file from stdin
+#[allow(dead_code)]
 fn skiparound(reader: &mut Vec<u8>, cur: &mut usize) {
     loop {
         let mut input = String::new();
@@ -365,22 +349,20 @@ fn skiparound(reader: &mut Vec<u8>, cur: &mut usize) {
 
 // cur is set at the fourth byte in the header
 fn parse_header(bytes: &usize) -> DecodeResult<(u8, u8, u8, u32, f64, u8, u8)> {
-    let unex_eof = DecodeError::UnexpectedEof;
-    
-    let AAAB_BCCD = (bytes >> 16) as u8 else { return Err(unex_eof) };
+    let aaab_bccd = (bytes >> 16) as u8;
     // AAA
     // (23-21) = guaranteed set at this point
     //
     // B B
     // (20,19) = audio version ID
     // bit 20 will only ever *not* be set for MPEG v2.5
-    let AAAB = AAAB_BCCD >> 4;
-    let mut version: u8 = (AAAB & 0x1) << 1;
+    let aaab = aaab_bccd >> 4;
+    let mut version: u8 = (aaab & 0x1) << 1;
     //
     // bit 19 is 0 for MPEG V2 or 1 for MPEG V1
     //
-    let BCCD = AAAB_BCCD & 0x0F;
-    version |= BCCD & 0x1;
+    let bccd = aaab_bccd & 0x0F;
+    version |= bccd & 0x1;
 
     print!("MPEG Version ");
     match version {
@@ -400,7 +382,7 @@ fn parse_header(bytes: &usize) -> DecodeResult<(u8, u8, u8, u32, f64, u8, u8)> {
     // 01 - Layer III
     // 10 - Layer II
     // 11 - Layer I
-    let layer: u8 = (BCCD >> 1) & 0x3;
+    let layer: u8 = (bccd >> 1) & 0x3;
     
     print!("Layer ");
     match layer {
@@ -418,33 +400,33 @@ fn parse_header(bytes: &usize) -> DecodeResult<(u8, u8, u8, u32, f64, u8, u8)> {
     // D
     // (16) = protection bit
     // if 0, check for 16bit CRC after header
-    let not_protected: u8 = BCCD & 0x1;
+    let not_protected: u8 = bccd & 0x1;
     if not_protected == 1{
         println!("Not protected");
     } else {
         println!("Protected");
     }
     
-    let EEEE_FFGH = (bytes >> 8) as u8 else { return Err(unex_eof) };
+    let eeee_ffgh = (bytes >> 8) as u8;
     // EEEE
     // (15,12) = bitrate index
     // this depends on combinations of version (V) and layer (L)
     // apply V2 to V2.5
     // 0000 and 1111 are not allowed
-    let EEEE = EEEE_FFGH >> 4;
-    let mut bitrate: u32;
-    if EEEE == 0 || EEEE == 0xF {
+    let eeee = eeee_ffgh >> 4;
+    let bitrate: u32;
+    if eeee == 0 || eeee == 0xF {
         return Err(DecodeError::UnsupportedFormat(String::from("This application does not support 'free' or 'bad' bitrates")));
     } else {
-        bitrate = match_bitrate(EEEE - 1, &version, &layer);
+        bitrate = match_bitrate(eeee - 1, &version, &layer);
         println!("Bitrate: {bitrate}");
     }
 
     // FF
     // (11,10) = sampling rate
     // varies by V
-    let FFGH = EEEE_FFGH & 0x0F;
-    let sr: f64 = match_sr(&FFGH, &version);
+    let ffgh = eeee_ffgh & 0x0F;
+    let sr: f64 = match_sr(&ffgh, &version);
     if sr == 0f64 {
         return Err(DecodeError::InvalidData(String::from("Sample rate cannot be zero")));
     }
@@ -452,7 +434,7 @@ fn parse_header(bytes: &usize) -> DecodeResult<(u8, u8, u8, u32, f64, u8, u8)> {
 
     // G
     // (9) = padding bit
-    let padded: u8 = (FFGH >> 1) & 0x1;
+    let padded: u8 = (ffgh >> 1) & 0x1;
     if padded == 1 {
         println!("Padded");
     } else {
@@ -463,11 +445,11 @@ fn parse_header(bytes: &usize) -> DecodeResult<(u8, u8, u8, u32, f64, u8, u8)> {
     // (8) = private bit
     // ignore
     //
-    let IIJJ_KLMM = *bytes as u8 else { return Err(unex_eof) };
+    let iijj_klmm = *bytes as u8;
     // I
     // (7,6) = channel mode
-    let IIJJ = IIJJ_KLMM >> 4;
-    let channel_mode = IIJJ >> 2;
+    let iijj = iijj_klmm >> 4;
+    let channel_mode = iijj >> 2;
     match channel_mode {
         0x0 => println!("Stereo"),
         0x1 => println!("Joint stereo"),

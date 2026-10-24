@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // sample_rate
 // (mainly used by TempoState and TempoGroup)

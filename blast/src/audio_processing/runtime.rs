@@ -1,38 +1,35 @@
 use alsa_sys::*;
-use std::os::unix::io::AsRawFd;
 use libc::{
     self, 
     c_int, EAGAIN, EPIPE,
-    ioctl, winsize, STDOUT_FILENO, TIOCGWINSZ,
     termios, tcgetattr, tcsetattr, cfmakeraw, TCSANOW,
 };
 use std::{
-    mem,
     ptr,
     thread,
     ffi::CString,
     time::Duration,
-    io::{self, Read, Write},
-    collections::{HashMap, hash_map::Entry},
+    io::{Read, Write},
+    collections::HashMap,
     sync::{Arc, Mutex, 
-        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering}
+        atomic::{AtomicBool, Ordering}
     },
 };
 
 use crate::file_parsing::decode_helpers::AudioFile;
 use crate::audio_processing::{
-    engine::{Conductor, Voice},
+    engine::Conductor,
     commands::{
-        CmdQueue, CmdProcessor, Command, EngineState,
+        CmdQueue, CmdProcessor, EngineState,
     },
-    blast_time::{blast_time::clock, sample_rate},
+    blast_time::sample_rate,
     line_editor::{LineEditor, Key, parse_key},
 };
 
 pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channels: u32) {
     // initialize audio engine and engine state
     let tracks_for_state = tracks.clone().into_values().collect();
-    let mut engine_state = EngineState::new(tracks_for_state, num_channels as usize);
+    let engine_state = EngineState::new(tracks_for_state, num_channels as usize);
     let mut conductor = Conductor::prepare(num_channels as usize, tracks);
 
     sample_rate::set(sample_rate);
@@ -46,11 +43,6 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
         let marker = marker.clone();
         let marker_for_mt = marker.clone();
         let editor = editor.clone();
-        let sr = sample_rate.clone();
-
-        let mut width = 80usize;
-        let mut height = 40usize;
-        let mut divider = width / 3;
 
         thread::spawn(move || {
             loop {
@@ -69,6 +61,10 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
                     print!("{}", editor.lock().unwrap().render(repl_chars[m]));
 
 /*
+                    let mut width = 80usize;
+                    let mut height = 40usize;
+                    let mut divider = width / 3;
+
                     unsafe {
                         let mut ws: winsize = mem::zeroed();
                         if ioctl(STDOUT_FILENO, TIOCGWINSZ.into(), &mut ws) == 0 {
@@ -267,7 +263,7 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
                 conductor.apply(cmd);
             }
 
-            let mut avail = snd_pcm_avail_update(handle) as i32;
+            let avail = snd_pcm_avail_update(handle) as i32;
             if avail == -EPIPE {
                 // underrun
                 snd_pcm_recover(handle, avail, 1);
@@ -328,7 +324,7 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
 //
 unsafe fn check_code(code: c_int, ctx: &str) {
     if code < 0 {
-        let msg = std::ffi::CStr::from_ptr(snd_strerror(code));
+        let msg = unsafe { std::ffi::CStr::from_ptr(snd_strerror(code)) };
         panic!("{ctx}: {}", msg.to_string_lossy());
     }
 }

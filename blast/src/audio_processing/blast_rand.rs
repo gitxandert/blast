@@ -49,7 +49,7 @@ impl X128P {
 
     pub fn next_i64_range(&mut self, lower: i64, upper: i64) -> i64 {
         let r = self.next_u64();
-        let mut range: u64 = match upper > lower {
+        let range: u64 = match upper > lower {
             true => (upper - lower).try_into().unwrap(),
             false => (lower - upper).try_into().unwrap(),
         };

@@ -1,6 +1,6 @@
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::HashMap;
 
 use crate::file_parsing::decode_helpers::AudioFile;
 use crate::audio_processing::{
@@ -22,7 +22,7 @@ impl CmdQueue {
     pub fn new(cap: usize) -> Self {
         let mut buf = Vec::<UnsafeCell<Option<Command>>>::with_capacity(cap);
 
-        for _ in {0..cap} {
+        for _ in 0..cap {
             buf.push(UnsafeCell::new(None));
         }
 
@@ -288,6 +288,7 @@ pub struct ProcRepr {
     idx: usize, // index of the Process in its owner's
                 // Vec<Process>
 
+    #[allow(dead_code)] // not read yet; kept for targeting Processes
     owner_idx: Idx, // index of the Process's $owner
                       // in the engine's Vec<$owner>
     tempo: Option<TempoRepr>,
@@ -318,6 +319,7 @@ pub struct EngineState {
     voices: HashMap<String, VoiceRepr>,
     groups: HashMap<String, GroupRepr>,
     tempo_cons: HashMap<String, TempoRepr>,
+    #[allow(dead_code)] // not read yet; for validating routing
     out_channels: usize,
 }
 
@@ -419,7 +421,7 @@ impl CmdProcessor {
         // if a Voice by this name (currently the track name)
         // already exists, then return error
         match self.find_voice(name.clone()) {
-            Ok(voice) => return Err(CmdErr::AlreadyIs { 
+            Ok(_) => return Err(CmdErr::AlreadyIs { 
                 ty: "Voice".to_string(), 
                 name: name 
             }),
@@ -778,7 +780,7 @@ impl CmdProcessor {
             if voice.tempo.mode == TempoMode::TBD {
                 voice.tempo = TempoRepr::clone_from(&tempo, g_idx);
                 v_flags.push(true);
-                for (_, mut process) in &mut voice.processes {
+                for (_, process) in &mut voice.processes {
                     // checks if any Process tempo has TempoMode::TBD
                     // (i.e. it was assigned to its Voice's
                     // uninitialized tempo, in anticipation of the
@@ -904,7 +906,7 @@ impl CmdProcessor {
         let mut chance: Vec<f32> = Vec::new();
         let mut jit: Vec<f32> = Vec::new();
         // implement user-defined seed l8r
-        let mut rng = X128P::new(fast_seed());
+        let rng = X128P::new(fast_seed());
         // key in the Voice's processes; defaults to the first free
         // of seq, seq1, seq2...
         let mut p_name: Option<String> = None;
@@ -1062,7 +1064,7 @@ impl CmdProcessor {
 
                     let c_strs: Vec<&str> = c_arg.split(',').collect();
 
-                    let mut spec_char = |s: &str| -> Option<char> {
+                    let spec_char = |s: &str| -> Option<char> {
                         for c in s.chars() {
                             match c {
                                 '_' => return Some('_'),
@@ -1083,7 +1085,7 @@ impl CmdProcessor {
                         }
                     };
 
-                    for i in {0..len} {
+                    for i in 0..len {
                         let string = c_strs.get(i).unwrap();
                         match spec_char(string) {
                             Some(c) => {
@@ -1112,7 +1114,7 @@ impl CmdProcessor {
 
                                         // if index = 'a', set all chance vals to chance_val and continue
                                         if *index_str == "a" {
-                                            for i in {0..chance.len()} {
+                                            for i in 0..chance.len() {
                                                 chance[i] = chance_val;
                                             }
                                             continue;
@@ -1126,7 +1128,7 @@ impl CmdProcessor {
                                                     })?;
                                         
                                         let mut found = false;
-                                        for i in {0..steps.len()} {
+                                        for i in 0..steps.len() {
                                             let step = *steps.get(i).unwrap();
                                             if index == step {
                                                 chance[i] = chance_val;
@@ -1194,7 +1196,7 @@ impl CmdProcessor {
                                         // steps can be in any order, so check
                                         // whether any step fell in the range
                                         let mut found = false;
-                                        for idx in {0..steps.len()} {
+                                        for idx in 0..steps.len() {
                                             let step = *steps.get(idx).unwrap();
                                             if step >= lower && step <= upper {
                                                 chance[idx] = chance_val;
@@ -1473,7 +1475,7 @@ impl CmdProcessor {
     }
 
     fn find_voice(&mut self, args: String) -> StateResult<&mut VoiceRepr> {      
-        let mut args: Vec<&str> = args.split('.').collect();
+        let args: Vec<&str> = args.split('.').collect();
         if args.len() > 2 {
             return Err(StateErr::Formatting { 
                 err: "Too many delimiters for format group.voice".to_string() 
@@ -1569,6 +1571,8 @@ macro_rules! cmd_errors {
             )*
         }
 
+        // mirrors CmdErr, but not every variant is raised internally
+        #[allow(dead_code)]
         #[derive(Debug)]
         enum StateErr {
             $(

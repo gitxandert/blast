@@ -1,6 +1,5 @@
 use std::fs::File;
-use std::io::{self, Read, SeekFrom};
-use std::ops::{Shl, BitOr, AddAssign};
+use std::io::Read;
 use super::decode_helpers::{AudioFile, DecodeError, DecodeResult, pcm_to_i16, float_to_i16, file_stem};
 
 // format codes
@@ -145,9 +144,9 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     
     let sample_rate: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
 
-    let data_rate: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
+    let _data_rate: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
 
-    let data_blk_sz: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
+    let _data_blk_sz: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
 
     let bits_per_sample: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
 
@@ -163,7 +162,7 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
         if cb_size >= 22 && fmt_size >= 40 {
             let valid_bits: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
 
-            let dw_channel_mask: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
+            let _dw_channel_mask: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
 
             let old_fmt: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
 

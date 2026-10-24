@@ -1,25 +1,17 @@
 use std::{
     rc::Rc, cell::RefCell,
-    collections::{HashMap, hash_map::Entry},
+    collections::HashMap,
 };
 
 use alsa_sys::*;
 
-use crate::file_parsing::decode_helpers::{
-    DecodeResult, DecodeError, AudioFile,
-};
+use crate::file_parsing::decode_helpers::AudioFile;
 use crate::audio_processing::{
     commands::*, // too many to list
-    processes::*, // this will be ditto
-    blast_rand::{
-        X128P, fast_seed
-    },
-    blast_time::{
-        sample_rate,
-        blast_time::{
-            clock, TempoMode, TempoUnit, TempoState
-        }
-    },
+    processes::*,
+    blast_time::blast_time::{
+            clock, TempoMode, TempoState
+        },
 };
 
 // audio engine
@@ -81,19 +73,17 @@ impl Conductor {
 
                     for voice in &mut self.voices {
                         if voice.state.active {
-                            voice.process(&mut mix, f, ch);
+                            voice.process(&mut mix, ch);
                         }
                     }
 
                     for group in &mut self.groups {
                         if group.state.active {
-                            group.process(&mut mix, f, ch);
+                            group.process(&mut mix, ch);
                         }
                     }
 
-                    unsafe {
-                        *sample_ptr = mix.clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-                    }
+                    *sample_ptr = mix.clamp(i16::MIN as f32, i16::MAX as f32) as i16;
                 }
 
                 // advance once per frame, after every channel is mixed
@@ -390,11 +380,14 @@ impl VoiceState {
 
 // instead of samples, Voices have a Function,
 // which are either some type of Wave or a collection of samples
+// (not used yet; see the rewrite note on Voice)
+#[allow(dead_code)]
 enum Function {
     Track { samples: Vec<i16> },
     Wave { form: WaveForm }
 }
 
+#[allow(dead_code)]
 enum WaveForm {
     Custom,
     Sine,
@@ -536,7 +529,7 @@ impl Voice {
 
     // mix one channel of the current frame into acc;
     // called once per channel
-    fn process(&mut self, acc: &mut f32, frame: u64, mut ch: usize) {
+    fn process(&mut self, acc: &mut f32, mut ch: usize) {
         if !self.state.active { return; }
 
         let state = &mut self.state;
@@ -567,17 +560,16 @@ impl Voice {
         }
 
         // linear interpolation
-        let mut sample = 0f32;
         let s0 = self.samples[(idx * self.channels) + (ch % self.channels)] as f32;
-        if state.velocity != 1.0 {
+        let sample = if state.velocity != 1.0 {
             let frac = state.position.fract();
             // the last frame has no next frame to interpolate toward
             let next = if idx < state.end { idx + 1 } else { idx };
             let s1 = self.samples[(next * self.channels) + (ch % self.channels)] as f32;
-            sample = s0 * (1.0 - frac) + s1 * frac;
+            s0 * (1.0 - frac) + s1 * frac
         } else {
-            sample = s0;
-        }
+            s0
+        };
 
         *acc += sample * state.gain;
     }
@@ -720,11 +712,11 @@ impl Group {
     }
 
     // mix one channel of the current frame into acc
-    fn process(&mut self, acc: &mut f32, frame: u64, mut ch: usize) {
+    fn process(&mut self, acc: &mut f32, ch: usize) {
         if !self.state.active { return; }
 
         for v in &mut self.voices {
-            v.process(acc, frame, ch);
+            v.process(acc, ch);
         }
     }
 
@@ -741,6 +733,10 @@ impl Group {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio_processing::{
+        blast_rand::X128P,
+        blast_time::{sample_rate, blast_time::TempoUnit},
+    };
     use crate::audio_processing::test_util::{conductor, render};
 
     // interleaved track of `frames` frames where every sample is `val`
@@ -1066,6 +1062,7 @@ mod tests {
 #[cfg(test)]
 mod group_tests {
     use super::*;
+    use crate::audio_processing::blast_time::sample_rate;
     use crate::audio_processing::test_util::{setup, run, track, render};
 
     fn seq_tempo(p: &Process) -> Rc<RefCell<TempoState>> {

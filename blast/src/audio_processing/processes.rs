@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use crate::audio_processing::{
     blast_rand::X128P,
     engine::{Voice, VoiceState},
-    blast_time::blast_time::{TempoState, TempoMode},
+    blast_time::blast_time::TempoState,
 };
 
 // Processes
@@ -177,7 +177,7 @@ mod tests {
     use crate::audio_processing::{
         commands::{CmdProcessor, EngineState, Command, SeqArgs, StartArgs, TempoRepr, Idx},
         blast_rand::fast_seed,
-        blast_time::{sample_rate, blast_time::TempoUnit},
+        blast_time::{sample_rate, blast_time::{TempoUnit, TempoMode}},
         engine::Conductor,
         test_util::{conductor, render},
     };

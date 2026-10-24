@@ -1,6 +1,5 @@
 use std::fs::File;
-use std::io::{self, Read, SeekFrom};
-use std::ops::{Shl, BitOr, AddAssign};
+use std::io::Read;
 use super::decode_helpers::{AudioFile, DecodeResult, DecodeError, pcm_to_i16, file_stem};
 
 fn read_id(vec: &mut Vec<u8>, start: &mut usize, end: &mut usize) -> DecodeResult<[u8; 4]> {
