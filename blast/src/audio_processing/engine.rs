@@ -257,7 +257,9 @@ impl Conductor {
             tempo.borrow_mut().init(tr.mode, tr.unit, tr.interval);
         } else {
             match tr.mode {
-                TempoMode::Voice => {
+                // TBD here means the Voice was loaded without a tempo;
+                // still share its (future) TempoState
+                TempoMode::Voice | TempoMode::TBD => {
                     tempo = Rc::clone(&self.voices[tr.idx].state.tempo);
                 }
                 TempoMode::Group => {
@@ -267,7 +269,7 @@ impl Conductor {
                     tempo = Rc::clone(&self.tempo_cons[tr.idx]);
                 }
                 // Process will never borrow from another Process
-                TempoMode::Process | TempoMode::TBD => (),
+                TempoMode::Process => (),
             }
         }
 
@@ -560,5 +562,77 @@ impl Group {
         if ts.mode == TempoMode::Group {
             ts.update(1.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio_processing::test_util::{setup, run, track};
+
+    fn seq_tempo(p: &Process) -> Rc<RefCell<TempoState>> {
+        match p {
+            Process::Seq(s) => Rc::clone(&s.state.tempo),
+        }
+    }
+
+    // tempo references (B15)
+
+    #[test]
+    fn seq_voice_tempo_shares_its_voice_rc() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("kick", 1, 16), track("snare", 2, 16)]);
+        run(&mut cp, &mut c, "load kick");
+        run(&mut cp, &mut c, "load snare -t b:120");
+        run(&mut cp, &mut c, "seq snare -t v -s 0");
+
+        let seq = seq_tempo(&c.voices[1].processes[0]);
+        assert!(Rc::ptr_eq(&seq, &c.voices[1].state.tempo));
+        assert!(!Rc::ptr_eq(&seq, &c.voices[0].state.tempo));
+    }
+
+    #[test]
+    fn seq_tbd_voice_tempo_shares_its_voice_rc() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("kick", 1, 16), track("snare", 2, 16)]);
+        run(&mut cp, &mut c, "load kick");
+        run(&mut cp, &mut c, "load snare");
+        run(&mut cp, &mut c, "seq snare -t v -s 0");
+
+        let seq = seq_tempo(&c.voices[1].processes[0]);
+        assert!(Rc::ptr_eq(&seq, &c.voices[1].state.tempo));
+    }
+
+    #[test]
+    fn group_tempo_refs_share_the_right_group_rc() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![
+            track("a", 1, 16), track("b", 2, 16), track("c", 3, 16), track("d", 4, 16),
+        ]);
+        run(&mut cp, &mut c, "load a");
+        run(&mut cp, &mut c, "load b");
+        run(&mut cp, &mut c, "load c");
+        run(&mut cp, &mut c, "group g1 -v a");
+        run(&mut cp, &mut c, "group g2 -v b");
+        run(&mut cp, &mut c, "seq c -t g:g2 -s 0");
+        run(&mut cp, &mut c, "load d -t g:g1");
+
+        // c is voices[0], d is voices[1]
+        let seq = seq_tempo(&c.voices[0].processes[0]);
+        assert!(Rc::ptr_eq(&seq, &c.groups[1].state.tempo));
+        assert!(Rc::ptr_eq(&c.voices[1].state.tempo, &c.groups[0].state.tempo));
+    }
+
+    #[test]
+    fn context_tempo_refs_share_the_context_rc() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("a", 1, 16)]);
+        run(&mut cp, &mut c, "tc c1 b:120");
+        run(&mut cp, &mut c, "tc c2 b:90");
+        run(&mut cp, &mut c, "load a -t c:c2");
+        run(&mut cp, &mut c, "seq a -t c:c1 -s 0");
+
+        assert!(Rc::ptr_eq(&c.voices[0].state.tempo, &c.tempo_cons[1]));
+        assert!(Rc::ptr_eq(&seq_tempo(&c.voices[0].processes[0]), &c.tempo_cons[0]));
     }
 }

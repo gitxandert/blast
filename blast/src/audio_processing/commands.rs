@@ -226,6 +226,19 @@ impl TempoRepr {
         }
     }
 
+    // like clone_owner, but for referring to the TempoState of a Voice
+    // or Group: if that object owns its TempoState, point at the
+    // object's current idx in the engine (its TempoRepr's own idx
+    // is meaningless); otherwise it already refers to something else
+    // (e.g. a TempoContext), so keep that reference
+    fn clone_from(other: &TempoRepr, owner_idx: usize) -> Self {
+        let mut repr = TempoRepr::clone_owner(other);
+        if other.owned {
+            repr.idx = owner_idx;
+        }
+        repr
+    }
+
     fn init(&mut self, mode: TempoMode, unit: TempoUnit, interval: f32) {
         self.mode = mode;
         self.unit = unit;
@@ -422,7 +435,7 @@ impl CmdProcessor {
                             })?;
 
                         tempo_repr = match self.find_group(g_name.to_string()) {
-                            Ok(g) => TempoRepr::clone_owner(&g.tempo),
+                            Ok(g) => TempoRepr::clone_from(&g.tempo, g.idx),
                             Err(error) => return Err(error.into()),
                         };
                         continue;
@@ -708,6 +721,8 @@ impl CmdProcessor {
         // assigned to the Group's TempoState
         let mut p_ids: Vec<Vec<usize>> = Vec::new();
 
+        let g_idx = self.engine_state.groups.len();
+
         for (_, voice) in &mut voices {
             // if the Voice wasn't assigned a TempoState at birth,
             // it takes on the TempoState of the Group
@@ -716,7 +731,7 @@ impl CmdProcessor {
             let mut p_i: Vec<usize> = Vec::new();
 
             if voice.tempo.mode == TempoMode::TBD {
-                voice.tempo = TempoRepr::clone_owner(&tempo);
+                voice.tempo = TempoRepr::clone_from(&tempo, g_idx);
                 v_flags.push(true);
                 for (_, mut process) in &mut voice.processes {
                     // checks if any Process tempo has TempoMode::TBD
@@ -726,7 +741,7 @@ impl CmdProcessor {
                     match &process.tempo {
                         Some(t) => {
                             if t.mode == TempoMode::TBD {
-                                process.tempo = Some(TempoRepr::clone_owner(&tempo));
+                                process.tempo = Some(TempoRepr::clone_from(&tempo, g_idx));
                             }
                             p_i.push(process.idx);
                         }
@@ -740,7 +755,7 @@ impl CmdProcessor {
             p_ids.push(p_i);
         }
 
-        let group = GroupRepr::new(self.engine_state.groups.len(), TempoRepr::clone(&tempo), voices);
+        let group = GroupRepr::new(g_idx, TempoRepr::clone(&tempo), voices);
 
         self.engine_state.groups.insert(name.to_string(), group);
 
@@ -856,7 +871,7 @@ impl CmdProcessor {
                             // refer to Voice's TempoState
                             tempo = {
                                 let voice = self.find_voice(name.clone())?;
-                                TempoRepr::clone_owner(&voice.tempo)
+                                TempoRepr::clone_from(&voice.tempo, voice.idx)
                             };
                             continue;
                         }
@@ -878,7 +893,7 @@ impl CmdProcessor {
                         let g_name = t_args.get(1).unwrap();
                         let g_name = g_name.to_string();
                         let g = self.find_group(g_name)?;
-                        tempo = TempoRepr::clone_owner(&g.tempo);
+                        tempo = TempoRepr::clone_from(&g.tempo, g.idx);
                         continue;
                     }
 
@@ -1370,5 +1385,162 @@ impl fmt::Display for CmdErr {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio_processing::test_util::track;
+
+    fn processor(names: &[&str]) -> CmdProcessor {
+        let files = names.iter().map(|n| track(n, 1, 16)).collect();
+        CmdProcessor::new(EngineState::new(files, 2))
+    }
+
+    fn ok(cp: &mut CmdProcessor, cmd: &str) -> Command {
+        match cp.parse(cmd.to_string()) {
+            Ok(command) => command,
+            Err(error) => panic!("'{}' failed: {}", cmd, error),
+        }
+    }
+
+    fn err(cp: &mut CmdProcessor, cmd: &str) -> CmdErr {
+        match cp.parse(cmd.to_string()) {
+            Ok(_) => panic!("'{}' should have failed", cmd),
+            Err(error) => error,
+        }
+    }
+
+    fn seq_tempo(cmd: Command) -> TempoRepr {
+        match cmd {
+            Command::Seq(args) => args.tempo,
+            _ => panic!("not a Seq"),
+        }
+    }
+
+    fn load_tempo(cmd: Command) -> TempoRepr {
+        match cmd {
+            Command::Load(args) => args.tempo_repr,
+            _ => panic!("not a Load"),
+        }
+    }
+
+    fn v_idx(cp: &CmdProcessor, name: &str) -> usize {
+        cp.engine_state.voices.get(name).unwrap().idx
+    }
+
+    // load / unload
+
+    #[test]
+    fn load_assigns_increasing_indices() {
+        let mut cp = processor(&["kick", "snare"]);
+        let t = load_tempo(ok(&mut cp, "load kick"));
+        assert!(t.owned);
+        assert_eq!(t.mode, TempoMode::TBD);
+
+        let t = load_tempo(ok(&mut cp, "load snare -t b:120"));
+        assert!(t.owned);
+        assert_eq!(t.mode, TempoMode::Voice);
+        assert_eq!(t.unit, TempoUnit::Bpm);
+        assert_eq!(t.interval, 120.0);
+
+        assert_eq!(v_idx(&cp, "kick"), 0);
+        assert_eq!(v_idx(&cp, "snare"), 1);
+    }
+
+    #[test]
+    fn load_errors() {
+        let mut cp = processor(&["kick"]);
+        assert!(matches!(err(&mut cp, "load nope"), CmdErr::NoItem { .. }));
+        assert!(matches!(err(&mut cp, "load kick -t x:1"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(err(&mut cp, "load kick -t c:nope"), CmdErr::NoItem { .. }));
+        assert!(matches!(err(&mut cp, "load kick -t g:nope"), CmdErr::NoItem { .. }));
+        assert!(cp.engine_state.voices.is_empty());
+        ok(&mut cp, "load kick");
+        assert!(matches!(err(&mut cp, "load kick"), CmdErr::AlreadyIs { .. }));
+    }
+
+    #[test]
+    fn unload_shifts_later_indices() {
+        let mut cp = processor(&["a", "b", "c"]);
+        ok(&mut cp, "load a");
+        ok(&mut cp, "load b");
+        ok(&mut cp, "load c");
+        match ok(&mut cp, "unload a") {
+            Command::Unload(args) => assert_eq!(args.idx, 0),
+            _ => panic!("not an Unload"),
+        }
+        assert!(cp.engine_state.voices.get("a").is_none());
+        assert_eq!(v_idx(&cp, "b"), 0);
+        assert_eq!(v_idx(&cp, "c"), 1);
+        assert!(matches!(err(&mut cp, "unload a"), CmdErr::NoVoice { .. }));
+    }
+
+    // tempo references (B15)
+
+    #[test]
+    fn seq_voice_tempo_points_at_its_voice() {
+        let mut cp = processor(&["kick", "snare"]);
+        ok(&mut cp, "load kick");
+        ok(&mut cp, "load snare -t b:120");
+        let t = seq_tempo(ok(&mut cp, "seq snare -t v -s 0"));
+        assert!(!t.owned);
+        assert_eq!(t.mode, TempoMode::Voice);
+        assert_eq!(t.idx, v_idx(&cp, "snare"));
+        assert_eq!(t.idx, 1);
+    }
+
+    #[test]
+    fn seq_voice_tempo_follows_index_shift() {
+        let mut cp = processor(&["kick", "snare"]);
+        ok(&mut cp, "load kick");
+        ok(&mut cp, "load snare -t b:120");
+        ok(&mut cp, "unload kick");
+        let t = seq_tempo(ok(&mut cp, "seq snare -t v -s 0"));
+        assert_eq!(t.idx, 0);
+    }
+
+    #[test]
+    fn seq_tbd_voice_tempo_points_at_its_voice() {
+        let mut cp = processor(&["kick", "snare"]);
+        ok(&mut cp, "load kick");
+        ok(&mut cp, "load snare");
+        let t = seq_tempo(ok(&mut cp, "seq snare -t v -s 0"));
+        assert!(!t.owned);
+        assert_eq!(t.mode, TempoMode::TBD);
+        assert_eq!(t.idx, 1);
+    }
+
+    #[test]
+    fn seq_context_tempo_points_at_context() {
+        let mut cp = processor(&["a"]);
+        ok(&mut cp, "tc c1 b:120");
+        ok(&mut cp, "tc c2 b:90");
+        ok(&mut cp, "load a");
+        let t = seq_tempo(ok(&mut cp, "seq a -t c:c2 -s 0"));
+        assert!(!t.owned);
+        assert_eq!(t.mode, TempoMode::Context);
+        assert_eq!(t.idx, 1);
+    }
+
+    #[test]
+    fn group_tempo_refs_point_at_their_group() {
+        let mut cp = processor(&["a", "b", "c", "d"]);
+        ok(&mut cp, "load a");
+        ok(&mut cp, "load b");
+        ok(&mut cp, "load c");
+        ok(&mut cp, "group g1 -v a");
+        ok(&mut cp, "group g2 -v b");
+
+        let t = seq_tempo(ok(&mut cp, "seq c -t g:g2 -s 0"));
+        assert!(!t.owned);
+        assert_eq!(t.mode, TempoMode::Group);
+        assert_eq!(t.idx, 1);
+
+        let t = load_tempo(ok(&mut cp, "load d -t g:g1"));
+        assert!(!t.owned);
+        assert_eq!(t.mode, TempoMode::Group);
+        assert_eq!(t.idx, 0);
     }
 }
