@@ -1,9 +1,6 @@
 use blast::{
-    file_parsing::{
-        load_assets,
-        decode_helpers::DecodeResult,
-    },
     audio_processing::runtime::run_blast,
+    file_parsing::{decode_helpers::DecodeResult, load_assets},
 };
 
 fn main() -> DecodeResult<()> {

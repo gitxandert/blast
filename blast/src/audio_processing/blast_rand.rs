@@ -53,7 +53,7 @@ impl X128P {
             true => (upper - lower).try_into().unwrap(),
             false => (lower - upper).try_into().unwrap(),
         };
-        
+
         let val = ((r as u128 * range as u128) >> 64) as i64;
         lower + val
     }

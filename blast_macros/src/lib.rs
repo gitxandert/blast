@@ -1,4 +1,4 @@
-use proc_macro::{TokenStream, TokenTree, Ident, Span};
+use proc_macro::{Ident, Span, TokenStream, TokenTree};
 
 #[proc_macro]
 pub fn var_args(var: TokenStream) -> TokenStream {

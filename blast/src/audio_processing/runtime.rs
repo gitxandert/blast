@@ -1,30 +1,25 @@
 use alsa_sys::*;
-use libc::{
-    self, 
-    c_int, EAGAIN, EPIPE,
-    termios, tcgetattr, tcsetattr, cfmakeraw, TCSANOW,
-};
+use libc::{self, EAGAIN, EPIPE, TCSANOW, c_int, cfmakeraw, tcgetattr, tcsetattr, termios};
 use std::{
-    ptr,
-    thread,
-    ffi::CString,
-    time::Duration,
-    io::{Read, Write},
     collections::HashMap,
-    sync::{Arc, Mutex, 
-        atomic::{AtomicBool, Ordering}
+    ffi::CString,
+    io::{Read, Write},
+    ptr,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
+    thread,
+    time::Duration,
 };
 
-use crate::file_parsing::decode_helpers::AudioFile;
 use crate::audio_processing::{
-    engine::Conductor,
-    commands::{
-        CmdQueue, CmdProcessor, EngineState,
-    },
     blast_time::sample_rate,
-    line_editor::{LineEditor, Key, parse_key},
+    commands::{CmdProcessor, CmdQueue, EngineState},
+    engine::Conductor,
+    line_editor::{Key, LineEditor, parse_key},
 };
+use crate::file_parsing::decode_helpers::AudioFile;
 
 pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channels: u32) {
     // initialize audio engine and engine state
@@ -60,42 +55,42 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
                     let m = *marker.lock().unwrap();
                     print!("{}", editor.lock().unwrap().render(repl_chars[m]));
 
-/*
-                    let mut width = 80usize;
-                    let mut height = 40usize;
-                    let mut divider = width / 3;
+                    /*
+                                      let mut width = 80usize;
+                                      let mut height = 40usize;
+                                      let mut divider = width / 3;
 
-                    unsafe {
-                        let mut ws: winsize = mem::zeroed();
-                        if ioctl(STDOUT_FILENO, TIOCGWINSZ.into(), &mut ws) == 0 {
-                            width = ws.ws_col as usize;
-                            height = ws.ws_row as usize;
-                            divider = width / 3;
-                        };
-                    }
+                                      unsafe {
+                                          let mut ws: winsize = mem::zeroed();
+                                          if ioctl(STDOUT_FILENO, TIOCGWINSZ.into(), &mut ws) == 0 {
+                                              width = ws.ws_col as usize;
+                                              height = ws.ws_row as usize;
+                                              divider = width / 3;
+                                          };
+                                      }
 
-                    let mut term = String::with_capacity(width * height);
+                                      let mut term = String::with_capacity(width * height);
 
-                    for j in {0..height} {
-                        for i in {0..width} {
-                            if i == divider {
-                                term.push('|');
-                            } else {
-                                term.push(' ');
-                            }
-                        }
-                    }
-                    print!("\x1b[H{}", term);
-                    
-                    print!("\x1b[H");
-  */
+                                      for j in {0..height} {
+                                          for i in {0..width} {
+                                              if i == divider {
+                                                  term.push('|');
+                                              } else {
+                                                  term.push(' ');
+                                              }
+                                          }
+                                      }
+                                      print!("\x1b[H{}", term);
+
+                                      print!("\x1b[H");
+                    */
                     std::io::stdout().flush().unwrap();
                 }
                 thread::sleep(Duration::from_millis(15));
             }
         });
     }
- 
+
     raw_mode("on");
 
     // create command queue between command and audio threads
@@ -129,8 +124,9 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
 
                         // checks the queue before parsing, so a full
                         // queue can't desync the mirror from the engine
-                        match cmd_processor.submit(cmd, &queue) {
-                            Ok(()) => (),
+                        match cmd_processor.submit(&cmd, &queue) {
+                            Ok(Some(text)) => println!("\n{text}"),
+                            Ok(None) => (),
                             Err(error) => {
                                 buf.clear();
                                 println!("\nErr: {error}");
@@ -178,7 +174,7 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
         });
     }
 
-    // install signal catchers and panic callbacks 
+    // install signal catchers and panic callbacks
     // to break main loop and turn off raw_mode
     install_sigterm_handler();
     install_panic_hook();
@@ -190,12 +186,7 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
         let dev = CString::new("hw:0,0").unwrap();
 
         check_code(
-            snd_pcm_open(
-                &mut handle,
-                dev.as_ptr(),
-                SND_PCM_STREAM_PLAYBACK,
-                0,
-            ),
+            snd_pcm_open(&mut handle, dev.as_ptr(), SND_PCM_STREAM_PLAYBACK, 0),
             "snd_pcm_open",
         );
 
@@ -212,8 +203,14 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
             snd_pcm_hw_params_set_format(handle, hw, SND_PCM_FORMAT_S16_LE),
             "set_format",
         );
-        check_code(snd_pcm_hw_params_set_channels(handle, hw, num_channels), "set_ channels");
-        check_code(snd_pcm_hw_params_set_rate(handle, hw, sample_rate, 0), "set_rate");
+        check_code(
+            snd_pcm_hw_params_set_channels(handle, hw, num_channels),
+            "set_ channels",
+        );
+        check_code(
+            snd_pcm_hw_params_set_rate(handle, hw, sample_rate, 0),
+            "set_rate",
+        );
 
         let mut period_size: snd_pcm_uframes_t = 128;
         check_code(
@@ -239,7 +236,10 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
         snd_pcm_sw_params_get_boundary(sw, &mut boundary);
         snd_pcm_sw_params_set_stop_threshold(handle, sw, boundary);
         // start immediately upon write
-        check_code(snd_pcm_sw_params_set_start_threshold(handle, sw, period_size), "set_start_threshold");
+        check_code(
+            snd_pcm_sw_params_set_start_threshold(handle, sw, period_size),
+            "set_start_threshold",
+        );
 
         // wake when period is available
         check_code(
@@ -252,7 +252,7 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
 
         // prepare device
         check_code(snd_pcm_prepare(handle), "snd_pcm_prepare");
-       
+
         loop {
             if TERM_RECEIVED.load(Ordering::Relaxed) {
                 break;
@@ -341,7 +341,7 @@ extern "C" fn handle_sigterm(_sig: libc::c_int) {
 fn install_sigterm_handler() {
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = handle_sigterm as usize;
+        sa.sa_sigaction = handle_sigterm as *const () as usize;
         sa.sa_flags = 0;
 
         // non-blocking

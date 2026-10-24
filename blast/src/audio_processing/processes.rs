@@ -1,10 +1,10 @@
-use std::rc::Rc;
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use crate::audio_processing::{
     blast_rand::X128P,
-    engine::{Voice, VoiceState},
     blast_time::blast_time::TempoState,
+    engine::{Voice, VoiceState},
 };
 
 // Processes
@@ -69,10 +69,10 @@ pub struct SeqState {
     pub steps: Vec<f32>,
     pub chance: Vec<f32>,
     pub jit: Vec<f32>,
-    pub rng: X128P, // TODO: impl user-defined seed
-    pub idx: usize, // index of the step after the last one fired
+    pub rng: X128P,        // TODO: impl user-defined seed
+    pub idx: usize,        // index of the step after the last one fired
     pub last: Option<f32>, // position at the previous process()
-    pub epoch: u32, // tempo.epoch when last was taken
+    pub epoch: u32,        // tempo.epoch when last was taken
 }
 
 impl Seq {
@@ -96,15 +96,21 @@ impl Seq {
     // advance through the steps; returns whether this step
     // should retrigger
     fn fire(&mut self) -> bool {
-        if !self.state.active { return false; }
+        if !self.state.active {
+            return false;
+        }
 
         let state = &mut self.state;
         let tempo = state.tempo.borrow();
 
-        if !tempo.active { return false; }
+        if !tempo.active {
+            return false;
+        }
 
         // nothing to sequence (the parser rejects these anyway)
-        if state.steps.is_empty() || state.period == 0 { return false; }
+        if state.steps.is_empty() || state.period == 0 {
+            return false;
+        }
 
         let period = state.period as f32;
         let current = tempo.current_in(period);
@@ -128,7 +134,9 @@ impl Seq {
         state.last = Some(current);
 
         // tempo didn't move (e.g. called again in the same frame)
-        if current == last { return false; }
+        if current == last {
+            return false;
+        }
 
         // the position wrapped past the end of the period
         let wrapped = current < last;
@@ -175,11 +183,16 @@ mod tests {
     use super::*;
 
     use crate::audio_processing::{
-        commands::{CmdProcessor, EngineState, Command, SeqArgs, StartArgs, TempoRepr, Idx},
         blast_rand::fast_seed,
-        blast_time::{sample_rate, blast_time::{TempoUnit, TempoMode}},
+        blast_time::{
+            blast_time::{TempoMode, TempoUnit},
+            sample_rate,
+        },
+        commands::{
+            CmdProcessor, Command, EngineState, Idx, Parsed, SeqArgs, StartArgs, TempoRepr,
+        },
         engine::Conductor,
-        test_util::{conductor, render},
+        test_util::{conductor, pcm, render},
     };
     use crate::file_parsing::decode_helpers::AudioFile;
 
@@ -190,7 +203,7 @@ mod tests {
     fn kick() -> AudioFile {
         let mut samples = vec![1i16; LEN];
         samples[0] = -1;
-        AudioFile::new("kick", "wav", 48000, 1, 16, samples)
+        AudioFile::new("kick", "wav", 48000, 1, 16, pcm(&samples))
     }
 
     // runs each command through the parser and into the engine;
@@ -200,8 +213,9 @@ mod tests {
         let mut cp = CmdProcessor::new(EngineState::new(vec![kick()], 1));
         let mut c = conductor(1, vec![kick()]);
         for cmd in cmds {
-            match cp.parse(cmd.to_string()) {
-                Ok(command) => c.apply(command),
+            match cp.parse(cmd) {
+                Ok(Parsed::Engine(command)) => c.apply(command),
+                Ok(Parsed::Local(_)) => (),
                 Err(e) => panic!("'{}' failed: {}", cmd, e),
             }
         }
@@ -241,7 +255,11 @@ mod tests {
 
     #[test]
     fn seq_with_voice_tempo() {
-        let mut c = setup(&["load kick -t s:1000", "seq kick -t v -p 2 -s 1", "start -v kick"]);
+        let mut c = setup(&[
+            "load kick -t s:1000",
+            "seq kick -t v -p 2 -s 1",
+            "start -v kick",
+        ]);
         let out = render(&mut c, 1, 5500);
         // frame 0 is the start itself
         assert_eq!(triggers(&out), vec![0, 1000, 3000, 5000]);
@@ -274,7 +292,12 @@ mod tests {
     fn assert_near(got: &[usize], want: &[f64]) {
         assert_eq!(got.len(), want.len(), "got {:?}, want {:?}", got, want);
         for (g, w) in got.iter().zip(want) {
-            assert!((*g as f64 - w.ceil()).abs() <= 1.0, "got {:?}, want {:?}", got, want);
+            assert!(
+                (*g as f64 - w.ceil()).abs() <= 1.0,
+                "got {:?}, want {:?}",
+                got,
+                want
+            );
         }
     }
 
@@ -306,7 +329,11 @@ mod tests {
     fn seq_fires_on_millis_interval() {
         // m:3.33 -> 159.84 samples per step
         let interval = 48000.0 * 3.33 / 1000.0;
-        let mut c = setup(&["load kick", "seq kick -t m:3.33 -p 2 -s 0,1.5", "start -v kick"]);
+        let mut c = setup(&[
+            "load kick",
+            "seq kick -t m:3.33 -p 2 -s 0,1.5",
+            "start -v kick",
+        ]);
         let out = render(&mut c, 1, 1500);
         let mut want = Vec::new();
         let mut p = 0.0;
@@ -315,7 +342,9 @@ mod tests {
             want.push((p + 1.5) * interval);
             p += 2.0;
         }
-        if p * interval < 1499.0 { want.push(p * interval); }
+        if p * interval < 1499.0 {
+            want.push(p * interval);
+        }
         assert_near(&triggers(&out), &want);
     }
 
@@ -326,7 +355,11 @@ mod tests {
         assert_eq!(triggers(&out), vec![0, 2000, 4000, 6000, 8000]);
 
         // step 3 is outside period 2, so it never fires
-        let mut c = setup(&["load kick", "seq kick -t s:1000 -p 2 -s 0,3", "start -v kick"]);
+        let mut c = setup(&[
+            "load kick",
+            "seq kick -t s:1000 -p 2 -s 0,3",
+            "start -v kick",
+        ]);
         let out = render(&mut c, 1, 4500);
         assert_eq!(triggers(&out), vec![0, 2000, 4000]);
     }

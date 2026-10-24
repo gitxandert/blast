@@ -35,7 +35,7 @@ pub mod blast_time {
         }
     }
     // tempo control
-    // 
+    //
     // a Process that relies on temporal parameters can be assigned
     // a TempoSolo to function at its own pace,
     // a TempoContext to synchronize with other separate Processes,
@@ -103,7 +103,7 @@ pub mod blast_time {
         pub fn init(&mut self, mode: TempoMode, unit: TempoUnit, interval: f32) {
             let interval_in_samps = convert_interval(&unit, interval);
             self.mode = mode;
-            self.unit = unit; 
+            self.unit = unit;
             self.interval = interval_in_samps;
         }
 
@@ -119,7 +119,9 @@ pub mod blast_time {
         //
         // paused/stopped TempoStates don't advance
         pub fn update(&mut self, delta_in_samples: f64) {
-            if !self.active { return; }
+            if !self.active {
+                return;
+            }
             self.current += delta_in_samples as u64;
         }
 
@@ -171,17 +173,17 @@ pub mod blast_time {
             TempoUnit::Millis => interval / 1000.0,
             TempoUnit::Bpm => 60.0 / interval,
         };
-        
+
         let interval_in_samples = sample_rate::get() as f32 * frac;
-       
+
         interval_in_samples
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::blast_time::*;
+    use super::*;
 
     fn tempo(unit: TempoUnit, interval: f32) -> TempoState {
         sample_rate::set(48000);

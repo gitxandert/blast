@@ -1,18 +1,13 @@
-use std::{
-    rc::Rc, cell::RefCell,
-    collections::HashMap,
-};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use alsa_sys::*;
 
-use crate::file_parsing::decode_helpers::AudioFile;
 use crate::audio_processing::{
+    blast_time::blast_time::{TempoMode, TempoState, clock},
     commands::*, // too many to list
     processes::*,
-    blast_time::blast_time::{
-            clock, TempoMode, TempoState
-        },
 };
+use crate::file_parsing::decode_helpers::AudioFile;
 
 // audio engine
 //
@@ -26,16 +21,21 @@ pub struct Conductor {
 
 impl Conductor {
     pub fn prepare(out_channels: usize, tracks: HashMap<String, AudioFile>) -> Self {
-        Self { 
-            voices: Vec::<Voice>::new(), 
+        Self {
+            voices: Vec::<Voice>::new(),
             groups: Vec::<Group>::new(),
             tempo_cons: Vec::<Rc<RefCell<TempoState>>>::new(),
-            out_channels, 
+            out_channels,
             tracks: tracks.into_values().collect(),
         }
     }
 
-    pub fn coordinate(&mut self, areas_ptr: *const snd_pcm_channel_area_t, offset: snd_pcm_uframes_t, frames: snd_pcm_uframes_t) {
+    pub fn coordinate(
+        &mut self,
+        areas_ptr: *const snd_pcm_channel_area_t,
+        offset: snd_pcm_uframes_t,
+        frames: snd_pcm_uframes_t,
+    ) {
         unsafe {
             let areas = std::slice::from_raw_parts(areas_ptr, self.out_channels);
 
@@ -112,11 +112,9 @@ impl Conductor {
             Command::Group(args) => self.group(args),
             Command::Tc(args) => self.tempo_context(args),
             Command::Seq(args) => self.seq(args),
-            Command::Quit(_) => {
-                unsafe {
-                    libc::raise(libc::SIGTERM);
-                }
-            }
+            Command::Quit(_) => unsafe {
+                libc::raise(libc::SIGTERM);
+            },
         }
     }
 
@@ -126,7 +124,6 @@ impl Conductor {
         self.voices.push(Voice::new(track, tempo_state));
     }
 
-    
     fn start(&mut self, args: StartArgs) {
         match args.idx {
             Idx::Voice(idx) => {
@@ -217,8 +214,12 @@ impl Conductor {
 
     fn unload(&mut self, args: UnloadArgs) {
         match args.idx {
-            Idx::Voice(v) => { self.voices.remove(v); }
-            Idx::GroupVoice(g, v) => { self.groups[g].voices.remove(v); }
+            Idx::Voice(v) => {
+                self.voices.remove(v);
+            }
+            Idx::GroupVoice(g, v) => {
+                self.groups[g].voices.remove(v);
+            }
             _ => (), // will only be Voice or GroupVoice
         }
     }
@@ -233,36 +234,36 @@ impl Conductor {
     }
 
     fn group(&mut self, args: GroupArgs) {
-       let tempo = self.tempo_from_repr(args.tempo);
-       let vs_fs_ps = args.vs_fs_ps;
+        let tempo = self.tempo_from_repr(args.tempo);
+        let vs_fs_ps = args.vs_fs_ps;
 
-       // vs_fs_ps is in Group order; remove Voices in reverse idx
-       // order so each removal doesn't shift the ones still to come,
-       // then put each Voice in its slot in the Group
-       let mut order: Vec<usize> = (0..vs_fs_ps.len()).collect();
-       order.sort_by(|a, b| vs_fs_ps[*b].0.cmp(&vs_fs_ps[*a].0));
+        // vs_fs_ps is in Group order; remove Voices in reverse idx
+        // order so each removal doesn't shift the ones still to come,
+        // then put each Voice in its slot in the Group
+        let mut order: Vec<usize> = (0..vs_fs_ps.len()).collect();
+        order.sort_by(|a, b| vs_fs_ps[*b].0.cmp(&vs_fs_ps[*a].0));
 
-       let mut slots: Vec<Option<Voice>> = vs_fs_ps.iter().map(|_| None).collect();
-       for pos in order {
-           let (idx, update_tempo, p_ids) = &vs_fs_ps[pos];
-           // move Voices out of conductor.voices into group.voices
-           let mut voice = self.voices.remove(*idx);
-           if *update_tempo {
-               // refer to Group TempoState
-               voice.state.tempo = Rc::clone(&tempo);
-               for p in p_ids {
-                   // these Processes also refer to the 
-                   // Group TempoState
-                   let process = &mut voice.processes[*p];
-                   process.update_tempo(Rc::clone(&tempo));
-               }
-           }
-           slots[pos] = Some(voice);
-       }
-       let voices: Vec<Voice> = slots.into_iter().map(|v| v.unwrap()).collect();
+        let mut slots: Vec<Option<Voice>> = vs_fs_ps.iter().map(|_| None).collect();
+        for pos in order {
+            let (idx, update_tempo, p_ids) = &vs_fs_ps[pos];
+            // move Voices out of conductor.voices into group.voices
+            let mut voice = self.voices.remove(*idx);
+            if *update_tempo {
+                // refer to Group TempoState
+                voice.state.tempo = Rc::clone(&tempo);
+                for p in p_ids {
+                    // these Processes also refer to the
+                    // Group TempoState
+                    let process = &mut voice.processes[*p];
+                    process.update_tempo(Rc::clone(&tempo));
+                }
+            }
+            slots[pos] = Some(voice);
+        }
+        let voices: Vec<Voice> = slots.into_iter().map(|v| v.unwrap()).collect();
 
-       let group = Group::new(voices, tempo);
-       self.groups.push(group);
+        let group = Group::new(voices, tempo);
+        self.groups.push(group);
     }
 
     fn tempo_context(&mut self, args: TcArgs) {
@@ -277,8 +278,11 @@ impl Conductor {
             // a Voice/TBD reference is to the Seq's own Voice (-t v);
             // tempo_from_repr only knows Conductor.voices, so take
             // a grouped Voice's TempoState directly
-            Idx::GroupVoice(g, v) if !args.tempo.owned
-                && (args.tempo.mode == TempoMode::Voice || args.tempo.mode == TempoMode::TBD) => {
+            Idx::GroupVoice(g, v)
+                if !args.tempo.owned
+                    && (args.tempo.mode == TempoMode::Voice
+                        || args.tempo.mode == TempoMode::TBD) =>
+            {
                 Rc::clone(&self.groups[g].voices[v].state.tempo)
             }
             _ => self.tempo_from_repr(TempoRepr::clone(&args.tempo)),
@@ -295,7 +299,7 @@ impl Conductor {
             last: None,
             epoch: tempo.borrow().epoch,
         };
-        
+
         match args.idx {
             Idx::Voice(v) => {
                 let voice: &mut Voice = self.voices.get_mut(v).unwrap();
@@ -359,7 +363,6 @@ impl Conductor {
 
         tempo
     }
-
 }
 
 pub struct VoiceState {
@@ -384,7 +387,7 @@ impl VoiceState {
 #[allow(dead_code)]
 enum Function {
     Track { samples: Vec<i16> },
-    Wave { form: WaveForm }
+    Wave { form: WaveForm },
 }
 
 #[allow(dead_code)]
@@ -407,7 +410,7 @@ enum WaveForm {
 pub struct Voice {
     samples: Vec<i16>,
     channels: usize,
-    pub state: VoiceState,  
+    pub state: VoiceState,
     processes: Vec<Process>,
     proc_tempi: Vec<Rc<RefCell<TempoState>>>, // TempoMode::Process
 }
@@ -422,12 +425,17 @@ impl Voice {
             end: (af.samples.len() / (af.num_channels as usize).max(1)).saturating_sub(1),
             velocity: 1.0,
             gain: 1.0,
-            tempo: tempo_state
+            tempo: tempo_state,
         };
 
         Self {
-            samples: af.samples.clone(),
-            channels: af.num_channels as usize, 
+            // tracks are f32 now (scaffold step 0); voices stay i16 until E1
+            samples: af
+                .samples
+                .iter()
+                .map(|&s| (s * 32768.0).clamp(-32768.0, 32767.0) as i16)
+                .collect(),
+            channels: af.num_channels as usize,
             state: voice_state,
             processes: Vec::<Process>::new(),
             proc_tempi: Vec::<Rc<RefCell<TempoState>>>::new(),
@@ -450,7 +458,7 @@ impl Voice {
                 println!("\nWarn: Tempo not active for Voice");
             }
         }
-                
+
         for tempo_state in &mut self.proc_tempi {
             let mut ts = tempo_state.borrow_mut();
             ts.start();
@@ -506,7 +514,9 @@ impl Voice {
     // run Processes and update TempoStates;
     // called once per frame, before process()
     fn tick(&mut self) {
-        if !self.state.active { return; }
+        if !self.state.active {
+            return;
+        }
 
         let state = &mut self.state;
 
@@ -530,7 +540,9 @@ impl Voice {
     // mix one channel of the current frame into acc;
     // called once per channel
     fn process(&mut self, acc: &mut f32, mut ch: usize) {
-        if !self.state.active { return; }
+        if !self.state.active {
+            return;
+        }
 
         let state = &mut self.state;
 
@@ -544,8 +556,8 @@ impl Voice {
 
         // if there are more output channels than the track has
         // recorded into, then skip putting info into the extra
-        // channels, unless the track is mono and there are two 
-        // output channels, in which case, output the same samples 
+        // channels, unless the track is mono and there are two
+        // output channels, in which case, output the same samples
         // through both channels
         //
         // this is a hack; def need a better routing system later
@@ -576,7 +588,9 @@ impl Voice {
 
     // move position; called once per frame, after process()
     fn advance(&mut self) {
-        if !self.state.active { return; }
+        if !self.state.active {
+            return;
+        }
 
         let state = &mut self.state;
 
@@ -596,7 +610,7 @@ pub struct GroupState {
 }
 
 pub struct Group {
-    pub state: GroupState, 
+    pub state: GroupState,
     pub voices: Vec<Voice>,
     pub processes: Vec<Process>,
     proc_tempi: Vec<Rc<RefCell<TempoState>>>, // TempoMode::Process
@@ -622,7 +636,7 @@ impl Group {
         let state = &mut self.state;
         state.active = true;
 
-        {   
+        {
             let mut ts = state.tempo.borrow_mut();
             if ts.mode == TempoMode::Group {
                 ts.active = true;
@@ -649,13 +663,13 @@ impl Group {
 
     fn pause(&mut self) {
         self.state.active = false; // Voices still active, but won't
-                                   // be doing anything since their
-                                   // process() isn't being called
+        // be doing anything since their
+        // process() isn't being called
     }
 
     fn resume(&mut self) {
         self.state.active = true;
-                
+
         let ts = self.state.tempo.borrow();
         if ts.mode == TempoMode::Context {
             if ts.active == false {
@@ -672,7 +686,7 @@ impl Group {
         for voice in &mut self.voices {
             voice.stop();
         }
-                
+
         for p in &mut self.processes {
             p.reset();
         }
@@ -691,7 +705,9 @@ impl Group {
     // run Voices, own Processes and TempoStates;
     // called once per frame
     fn tick(&mut self) {
-        if !self.state.active { return; }
+        if !self.state.active {
+            return;
+        }
 
         for v in &mut self.voices {
             v.tick();
@@ -713,7 +729,9 @@ impl Group {
 
     // mix one channel of the current frame into acc
     fn process(&mut self, acc: &mut f32, ch: usize) {
-        if !self.state.active { return; }
+        if !self.state.active {
+            return;
+        }
 
         for v in &mut self.voices {
             v.process(acc, ch);
@@ -722,7 +740,9 @@ impl Group {
 
     // advance Voices; called once per frame
     fn advance(&mut self) {
-        if !self.state.active { return; }
+        if !self.state.active {
+            return;
+        }
 
         for v in &mut self.voices {
             v.advance();
@@ -733,15 +753,22 @@ impl Group {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio_processing::test_util::{conductor, pcm, render};
     use crate::audio_processing::{
         blast_rand::X128P,
-        blast_time::{sample_rate, blast_time::TempoUnit},
+        blast_time::{blast_time::TempoUnit, sample_rate},
     };
-    use crate::audio_processing::test_util::{conductor, render};
 
     // interleaved track of `frames` frames where every sample is `val`
     fn track(name: &str, channels: u32, frames: usize, val: i16) -> AudioFile {
-        AudioFile::new(name, "wav", 48000, channels, 16, vec![val; frames * channels as usize])
+        AudioFile::new(
+            name,
+            "wav",
+            48000,
+            channels,
+            16,
+            pcm(&vec![val; frames * channels as usize]),
+        )
     }
 
     fn tempo(mode: TempoMode, interval: f32) -> TempoRepr {
@@ -758,16 +785,25 @@ mod tests {
     fn one_voice(out_channels: usize, af: AudioFile, tr: TempoRepr) -> Conductor {
         sample_rate::set(48000);
         let mut c = conductor(out_channels, vec![af]);
-        c.apply(Command::Load(LoadArgs { track_idx: 0, tempo_repr: tr }));
+        c.apply(Command::Load(LoadArgs {
+            track_idx: 0,
+            tempo_repr: tr,
+        }));
         c
     }
 
     fn start_voice(c: &mut Conductor, idx: usize) {
-        c.apply(Command::Start(StartArgs { idx: Idx::Voice(idx) }));
+        c.apply(Command::Start(StartArgs {
+            idx: Idx::Voice(idx),
+        }));
     }
 
     fn voice_tempo_ticks_once_per_frame(channels: usize) {
-        let mut c = one_voice(channels, track("t", channels as u32, 2000, 100), tempo(TempoMode::Voice, 100.0));
+        let mut c = one_voice(
+            channels,
+            track("t", channels as u32, 2000, 100),
+            tempo(TempoMode::Voice, 100.0),
+        );
         start_voice(&mut c, 0);
 
         render(&mut c, channels, 1000);
@@ -841,7 +877,7 @@ mod tests {
 
     #[test]
     fn mono_voice_on_stereo_advances_once_per_frame() {
-        let af = AudioFile::new("m", "wav", 48000, 1, 16, (0..100).collect());
+        let af = AudioFile::new("m", "wav", 48000, 1, 16, pcm(&(0..100).collect::<Vec<_>>()));
         let mut c = one_voice(2, af, tempo(TempoMode::Voice, 100.0));
         start_voice(&mut c, 0);
 
@@ -857,7 +893,7 @@ mod tests {
     fn stereo_voice_on_stereo_keeps_channels() {
         // L = frame index, R = -frame index
         let samples: Vec<i16> = (0..100).flat_map(|s| [s, -s]).collect();
-        let af = AudioFile::new("s", "wav", 48000, 2, 16, samples);
+        let af = AudioFile::new("s", "wav", 48000, 2, 16, pcm(&samples));
         let mut c = one_voice(2, af, tempo(TempoMode::Voice, 100.0));
         start_voice(&mut c, 0);
 
@@ -870,21 +906,30 @@ mod tests {
 
     // mono [10,20,30,40,50] at 1 output channel with velocity `vel`
     fn render_at_velocity(vel: f32, frames: usize) -> Vec<i16> {
-        let af = AudioFile::new("v", "wav", 48000, 1, 16, vec![10, 20, 30, 40, 50]);
+        let af = AudioFile::new("v", "wav", 48000, 1, 16, pcm(&[10, 20, 30, 40, 50]));
         let mut c = one_voice(1, af, tempo(TempoMode::Voice, 100.0));
-        c.apply(Command::Velocity(VelocityArgs { idx: Idx::Voice(0), val: vel }));
+        c.apply(Command::Velocity(VelocityArgs {
+            idx: Idx::Voice(0),
+            val: vel,
+        }));
         start_voice(&mut c, 0);
         render(&mut c, 1, frames)
     }
 
     #[test]
     fn forward_playback_plays_every_frame_then_stops() {
-        assert_eq!(render_at_velocity(1.0, 8), vec![10, 20, 30, 40, 50, 0, 0, 0]);
+        assert_eq!(
+            render_at_velocity(1.0, 8),
+            vec![10, 20, 30, 40, 50, 0, 0, 0]
+        );
     }
 
     #[test]
     fn reverse_playback_plays_every_frame_then_stops() {
-        assert_eq!(render_at_velocity(-1.0, 8), vec![50, 40, 30, 20, 10, 0, 0, 0]);
+        assert_eq!(
+            render_at_velocity(-1.0, 8),
+            vec![50, 40, 30, 20, 10, 0, 0, 0]
+        );
     }
 
     #[test]
@@ -910,8 +955,14 @@ mod tests {
         // track order comes from a HashMap, so look the indices up
         let ia = c.tracks.iter().position(|t| t.file_name == "a").unwrap();
         let ib = c.tracks.iter().position(|t| t.file_name == "b").unwrap();
-        c.apply(Command::Load(LoadArgs { track_idx: ia, tempo_repr: tempo(TempoMode::Voice, 100.0) }));
-        c.apply(Command::Load(LoadArgs { track_idx: ib, tempo_repr: tempo(TempoMode::Voice, 100.0) }));
+        c.apply(Command::Load(LoadArgs {
+            track_idx: ia,
+            tempo_repr: tempo(TempoMode::Voice, 100.0),
+        }));
+        c.apply(Command::Load(LoadArgs {
+            track_idx: ib,
+            tempo_repr: tempo(TempoMode::Voice, 100.0),
+        }));
         start_voice(&mut c, 0);
         start_voice(&mut c, 1);
         render(&mut c, 1, 10)
@@ -919,12 +970,20 @@ mod tests {
 
     #[test]
     fn mix_clips_at_i16_max() {
-        assert!(render_two_voices(30000, 30000).iter().all(|&s| s == i16::MAX));
+        assert!(
+            render_two_voices(30000, 30000)
+                .iter()
+                .all(|&s| s == i16::MAX)
+        );
     }
 
     #[test]
     fn mix_clips_at_i16_min() {
-        assert!(render_two_voices(-30000, -30000).iter().all(|&s| s == i16::MIN));
+        assert!(
+            render_two_voices(-30000, -30000)
+                .iter()
+                .all(|&s| s == i16::MIN)
+        );
     }
 
     #[test]
@@ -937,11 +996,16 @@ mod tests {
     fn tempo_context_ticks_once_per_frame_while_active() {
         sample_rate::set(48000);
         let mut c = conductor(2, vec![track("t", 2, 2000, 100)]);
-        c.apply(Command::Tc(TcArgs { tempo: tempo(TempoMode::Context, 100.0) }));
+        c.apply(Command::Tc(TcArgs {
+            tempo: tempo(TempoMode::Context, 100.0),
+        }));
         // a Voice synced to the context shares its TempoState
         let mut synced = tempo(TempoMode::Context, 100.0);
         synced.owned = false;
-        c.apply(Command::Load(LoadArgs { track_idx: 0, tempo_repr: synced }));
+        c.apply(Command::Load(LoadArgs {
+            track_idx: 0,
+            tempo_repr: synced,
+        }));
 
         // not started yet
         render(&mut c, 2, 10);
@@ -970,9 +1034,25 @@ mod tests {
     // that retriggers on steps 0 and 2 of a 4-step period at s:100
     fn group_with_seq(seq_tempo: TempoRepr) -> Conductor {
         sample_rate::set(48000);
-        let mut c = conductor(1, vec![AudioFile::new("t", "wav", 48000, 1, 16, (0..1000).collect())]);
-        c.apply(Command::Load(LoadArgs { track_idx: 0, tempo_repr: tempo(TempoMode::Voice, 100.0) }));
-        c.apply(Command::Load(LoadArgs { track_idx: 0, tempo_repr: tempo(TempoMode::Voice, 100.0) }));
+        let mut c = conductor(
+            1,
+            vec![AudioFile::new(
+                "t",
+                "wav",
+                48000,
+                1,
+                16,
+                pcm(&(0..1000).collect::<Vec<_>>()),
+            )],
+        );
+        c.apply(Command::Load(LoadArgs {
+            track_idx: 0,
+            tempo_repr: tempo(TempoMode::Voice, 100.0),
+        }));
+        c.apply(Command::Load(LoadArgs {
+            track_idx: 0,
+            tempo_repr: tempo(TempoMode::Voice, 100.0),
+        }));
         c.apply(Command::Group(GroupArgs {
             tempo: tempo(TempoMode::Group, 100.0),
             vs_fs_ps: vec![(1, true, Vec::new()), (0, true, Vec::new())],
@@ -1018,7 +1098,14 @@ mod tests {
 
     #[test]
     fn voice_seq_retriggers_voice() {
-        let af = AudioFile::new("t", "wav", 48000, 1, 16, (0..1000).collect());
+        let af = AudioFile::new(
+            "t",
+            "wav",
+            48000,
+            1,
+            16,
+            pcm(&(0..1000).collect::<Vec<_>>()),
+        );
         let mut c = one_voice(1, af, tempo(TempoMode::Voice, 100.0));
         c.apply(Command::Seq(SeqArgs {
             idx: Idx::Voice(0),
@@ -1063,7 +1150,7 @@ mod tests {
 mod group_tests {
     use super::*;
     use crate::audio_processing::blast_time::sample_rate;
-    use crate::audio_processing::test_util::{setup, run, track, render};
+    use crate::audio_processing::test_util::{render, run, setup, track};
 
     fn seq_tempo(p: &Process) -> Rc<RefCell<TempoState>> {
         match p {
@@ -1101,9 +1188,15 @@ mod group_tests {
     #[test]
     fn group_tempo_refs_share_the_right_group_rc() {
         sample_rate::set(48000);
-        let (mut cp, mut c) = setup(1, vec![
-            track("a", 1, 16), track("b", 2, 16), track("c", 3, 16), track("d", 4, 16),
-        ]);
+        let (mut cp, mut c) = setup(
+            1,
+            vec![
+                track("a", 1, 16),
+                track("b", 2, 16),
+                track("c", 3, 16),
+                track("d", 4, 16),
+            ],
+        );
         run(&mut cp, &mut c, "load a");
         run(&mut cp, &mut c, "load b");
         run(&mut cp, &mut c, "load c");
@@ -1115,7 +1208,10 @@ mod group_tests {
         // c is voices[0], d is voices[1]
         let seq = seq_tempo(&c.voices[0].processes[0]);
         assert!(Rc::ptr_eq(&seq, &c.groups[1].state.tempo));
-        assert!(Rc::ptr_eq(&c.voices[1].state.tempo, &c.groups[0].state.tempo));
+        assert!(Rc::ptr_eq(
+            &c.voices[1].state.tempo,
+            &c.groups[0].state.tempo
+        ));
     }
 
     #[test]
@@ -1128,7 +1224,10 @@ mod group_tests {
         run(&mut cp, &mut c, "seq a -t c:c1 -s 0");
 
         assert!(Rc::ptr_eq(&c.voices[0].state.tempo, &c.tempo_cons[1]));
-        assert!(Rc::ptr_eq(&seq_tempo(&c.voices[0].processes[0]), &c.tempo_cons[0]));
+        assert!(Rc::ptr_eq(
+            &seq_tempo(&c.voices[0].processes[0]),
+            &c.tempo_cons[0]
+        ));
     }
 
     // grouping
@@ -1142,9 +1241,10 @@ mod group_tests {
     fn group_voices_follow_mirror_order() {
         sample_rate::set(48000);
         for (cmd, want) in [("group g -v c,a", [3, 1]), ("group g -v a,c", [1, 3])] {
-            let (mut cp, mut c) = setup(1, vec![
-                track("a", 1, 16), track("b", 2, 16), track("c", 3, 16),
-            ]);
+            let (mut cp, mut c) = setup(
+                1,
+                vec![track("a", 1, 16), track("b", 2, 16), track("c", 3, 16)],
+            );
             run(&mut cp, &mut c, "load a");
             run(&mut cp, &mut c, "load b");
             run(&mut cp, &mut c, "load c");
@@ -1176,9 +1276,10 @@ mod group_tests {
 
     fn grouped() -> (CmdProcessor, Conductor) {
         sample_rate::set(48000);
-        let (mut cp, mut c) = setup(1, vec![
-            track("a", 1, 16), track("b", 2, 16), track("c", 3, 16),
-        ]);
+        let (mut cp, mut c) = setup(
+            1,
+            vec![track("a", 1, 16), track("b", 2, 16), track("c", 3, 16)],
+        );
         run(&mut cp, &mut c, "load a");
         run(&mut cp, &mut c, "load b -t b:120");
         run(&mut cp, &mut c, "load c");
@@ -1252,9 +1353,10 @@ mod group_tests {
         sample_rate::set(48000);
         for _ in 0..10 {
             for perm in ["a,b,c", "b,c,a", "c,a,b", "c,b,a"] {
-                let (mut cp, mut c) = setup(1, vec![
-                    track("a", 1, 16), track("b", 2, 16), track("c", 3, 16),
-                ]);
+                let (mut cp, mut c) = setup(
+                    1,
+                    vec![track("a", 1, 16), track("b", 2, 16), track("c", 3, 16)],
+                );
                 run(&mut cp, &mut c, "load a");
                 run(&mut cp, &mut c, "load b -t b:90");
                 run(&mut cp, &mut c, "load c");
@@ -1305,7 +1407,10 @@ mod group_tests {
         run(&mut cp, &mut c, "group g -v a");
 
         let g = &c.groups[0];
-        assert!(Rc::ptr_eq(&seq_tempo(&g.voices[0].processes[0]), &g.state.tempo));
+        assert!(Rc::ptr_eq(
+            &seq_tempo(&g.voices[0].processes[0]),
+            &g.state.tempo
+        ));
     }
 
     // failed commands don't touch the mirror (B16)
@@ -1316,7 +1421,7 @@ mod group_tests {
         let (mut cp, mut c) = setup(1, vec![track("a", 1, 16), track("b", 2, 16)]);
         run(&mut cp, &mut c, "load a");
         run(&mut cp, &mut c, "load b");
-        assert!(cp.parse("group g -v a,nope".to_string()).is_err());
+        assert!(cp.parse("group g -v a,nope").is_err());
 
         // b is still voices[1] on both sides
         run(&mut cp, &mut c, "velocity b 2");
@@ -1336,12 +1441,12 @@ mod group_tests {
         sample_rate::set(48000);
         let (mut cp, mut c) = setup(1, vec![track("a", 1, 16), track("b", 2, 16)]);
         run(&mut cp, &mut c, "tc x b:120");
-        assert!(cp.parse("tc x b:90".to_string()).is_err());
+        assert!(cp.parse("tc x b:90").is_err());
         run(&mut cp, &mut c, "tc y b:60");
         run(&mut cp, &mut c, "load a");
         run(&mut cp, &mut c, "load b");
         run(&mut cp, &mut c, "group g -v a");
-        assert!(cp.parse("group g -v b".to_string()).is_err());
+        assert!(cp.parse("group g -v b").is_err());
         run(&mut cp, &mut c, "group h -t c:y -v b");
 
         assert_eq!(c.tempo_cons.len(), 2);
@@ -1391,7 +1496,7 @@ mod group_tests {
         run(&mut cp, &mut c, "velocity g.b 2");
         assert_eq!(c.groups[0].voices[0].state.velocity, 2.0);
 
-        assert!(cp.parse("unload g.a".to_string()).is_err());
+        assert!(cp.parse("unload g.a").is_err());
         run(&mut cp, &mut c, "unload c");
         assert!(c.voices.is_empty());
     }

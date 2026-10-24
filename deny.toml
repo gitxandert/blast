@@ -1,0 +1,35 @@
+# cargo-deny policy (plans/README.md §1.1). Run: cargo deny check
+
+[advisories]
+# RustSec advisory database; any unmaintained/unsound/vulnerable crate fails.
+yanked = "deny"
+
+[licenses]
+# MIT, Apache-2.0, MPL-2.0, BSD, Unicode, ISC, Zlib.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "MPL-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "ISC",
+    "Zlib",
+]
+confidence-threshold = 0.8
+# ISC is allowed in advance even though nothing uses it yet.
+unused-allowed-license = "allow"
+
+[licenses.private]
+# Our own crates are unlicensed and never published (publish = false).
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+
+[sources]
+# crates.io is the only allowed source.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

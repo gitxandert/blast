@@ -3,12 +3,12 @@
 // drives Conductor::coordinate without ALSA by pointing fake
 // channel areas at an interleaved Vec<i16>
 
-use std::{ffi::c_void, collections::HashMap};
+use std::{collections::HashMap, ffi::c_void};
 
 use alsa_sys::snd_pcm_channel_area_t;
 
+use crate::audio_processing::commands::{CmdProcessor, EngineState, Parsed};
 use crate::audio_processing::engine::Conductor;
-use crate::audio_processing::commands::{CmdProcessor, EngineState};
 use crate::file_parsing::decode_helpers::AudioFile;
 
 // interleaved i16 buffer of frames * channels, like ALSA's mmap areas
@@ -57,15 +57,21 @@ pub fn setup(channels: usize, tracks: Vec<AudioFile>) -> (CmdProcessor, Conducto
 // parse a command line and apply it to the Conductor;
 // panics if the command doesn't parse
 pub fn run(cp: &mut CmdProcessor, conductor: &mut Conductor, cmd: &str) {
-    match cp.parse(cmd.to_string()) {
-        Ok(command) => conductor.apply(command),
+    match cp.parse(cmd) {
+        Ok(Parsed::Engine(command)) => conductor.apply(command),
+        Ok(Parsed::Local(_)) => (),
         Err(error) => panic!("'{}' failed: {}", cmd, error),
     }
 }
 
 // mono track whose samples are all `val`
 pub fn track(name: &str, val: i16, frames: usize) -> AudioFile {
-    AudioFile::new(name, "wav", 48000, 1, 16, vec![val; frames])
+    AudioFile::new(name, "wav", 48000, 1, 16, pcm(&vec![val; frames]))
+}
+
+// i16 test values as f32 track samples; Voice::new converts them back exactly
+pub fn pcm(samples: &[i16]) -> Vec<f32> {
+    samples.iter().map(|&s| f32::from(s) / 32768.0).collect()
 }
 
 #[cfg(test)]

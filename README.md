@@ -22,17 +22,30 @@ One of the goals of this project is to realize as many features as possible with
 - processes Commands separately from audio thread for string parsing, hashmap operations, and robust error-handling
 - uses terminal in raw mode for custom terminal rendering
 - implements fast RNG with xoroshiro128+ generation, Lemire's fast modulo, and architecture-specific seeding
+- commands/
+  - mod: `Command`, `Parsed`, `CmdProcessor::parse`/`submit`
+  - errors: `CmdErr`
+  - queue: `CmdQueue` (the command queue to the audio thread)
+  - reprs: `Idx`, `EngineState` (the REPL-side mirror of the engine) and its lookups
+  - tempo: `TempoRepr`, the shared `-t` tempo-spec parser, `tc`
+  - voice, group, track, process: each family's parsers and `HELP` table
+  - procs/seq: the `seq` process parser
+  - testing: shared test helpers
 
 **src/file_parsing**:
-- mpeg
-  - parses MPEG frames
-  - TODO: implement actual decoding of compressed data  
-- wav
-  - parses RIFF, fmt, and data chunks sequentially
-- aiff
-  - parses FORM, COMM, and SSND chunks sequentially
-- decode_helpers  
-  - implements custom DecodeErrors and DecodeResult for in-memory file parsing  
+- mod
+  - `decode_file`/`decode_bytes`/`probe_file`: one entry point for every supported extension
+  - `load_assets`: decodes the assets/ folder and agrees on a sample rate
+- symphonia
+  - decodes WAV, AIFF/AIFC, FLAC, MP1/2/3, AAC (MP4/ADTS), ALAC and ADPCM through symphonia
+  - fills corrupt packets with silence, so timing holds
+- raw, au, pcm
+  - headerless PCM (spec from the file name, e.g. `kick.s16le.48000.2.raw`) and Sun `.au`/`.snd`
+  - shared sample converters, including G.711 A-law and µ-law
+- riff_fixup
+  - repairs WAV/AIFF quirks symphonia rejects (wrong sizes, `data` before `fmt `, `fact`/COMM frame counts)
+- decode_helpers
+  - implements custom DecodeErrors and DecodeResult for in-memory file parsing
   - provides AudioFile struct to return necessary data for audio APIs
 
 ## Documents consulted
