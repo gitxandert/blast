@@ -1,10 +1,15 @@
 // REPL input line: buffer + cursor, kept free of terminal I/O
 // so the editing and redraw logic can be tested
 //
+// the cursor is a char index (not a byte index), so multibyte
+// UTF-8 chars can't split; it's converted to a byte offset for
+// String ops. render assumes one column per char, which is wrong
+// for wide (e.g. CJK) chars, but commands are ASCII anyway
+//
 #[derive(Debug, Default)]
 pub struct LineEditor {
     buf: String,
-    // insertion point, 0..=buf.len()
+    // insertion point as a char index, 0..=len()
     cur: usize,
 }
 
@@ -21,24 +26,39 @@ impl LineEditor {
         self.cur
     }
 
-    // insert at the cursor and move past it
+    // length in chars
+    pub fn len(&self) -> usize {
+        self.buf.chars().count()
+    }
+
+    // byte offset of char index `idx` (buf.len() past the end)
+    fn byte_idx(&self, idx: usize) -> usize {
+        self.buf.char_indices().nth(idx).map_or(self.buf.len(), |(i, _)| i)
+    }
+
+    // insert at the cursor and move past it;
+    // control chars are dropped
     pub fn insert(&mut self, c: char) {
-        self.buf.insert(self.cur, c);
+        if c.is_control() { return; }
+        let at = self.byte_idx(self.cur);
+        self.buf.insert(at, c);
         self.cur += 1;
     }
 
     // delete the char left of the cursor
     pub fn backspace(&mut self) {
         if self.cur > 0 {
-            self.buf.remove(self.cur - 1);
+            let at = self.byte_idx(self.cur - 1);
+            self.buf.remove(at);
             self.cur -= 1;
         }
     }
 
     // delete the char under the cursor
     pub fn delete(&mut self) {
-        if self.cur < self.buf.len() {
-            self.buf.remove(self.cur);
+        if self.cur < self.len() {
+            let at = self.byte_idx(self.cur);
+            self.buf.remove(at);
         }
     }
 
@@ -47,7 +67,7 @@ impl LineEditor {
     }
 
     pub fn end(&mut self) {
-        self.cur = self.buf.len();
+        self.cur = self.len();
     }
 
     pub fn left(&mut self) {
@@ -55,13 +75,13 @@ impl LineEditor {
     }
 
     pub fn right(&mut self) {
-        if self.cur < self.buf.len() { self.cur += 1; }
+        if self.cur < self.len() { self.cur += 1; }
     }
 
     // replace the line (e.g. from history); cursor goes to the end
     pub fn set(&mut self, line: String) {
         self.buf = line;
-        self.cur = self.buf.len();
+        self.cur = self.len();
     }
 
     pub fn clear(&mut self) {
@@ -81,7 +101,7 @@ impl LineEditor {
     // (only when needed: CSI 0 D still moves one column)
     pub fn render(&self, marker: char) -> String {
         let mut out = format!("\r{} {}\x1b[K", marker, self.buf);
-        let back = self.buf.len() - self.cur;
+        let back = self.len() - self.cur;
         if back > 0 {
             out.push_str(&format!("\x1b[{}D", back));
         }
@@ -113,7 +133,10 @@ pub enum Key {
 // bytes (e.g. the '~' of ESC[3~) leak into the line.
 // an ESC that doesn't start a CSI (ESC[) or SS3 (ESCO) sequence
 // is dropped and the following byte is read as a normal key,
-// so Alt+x (ESC x) types 'x' and ESC ESC [ D is still Left
+// so Alt+x (ESC x) types 'x' and ESC ESC [ D is still Left.
+// printable ASCII and complete UTF-8 chars become Key::Char;
+// other control bytes (Tab, Ctrl-D, ...) and malformed UTF-8 are Ignore
+// (a malformed sequence also eats the byte that broke it)
 pub fn parse_key<I: Iterator<Item = u8>>(bytes: &mut I) -> Key {
     let mut b = match bytes.next() {
         Some(b) => b,
@@ -133,7 +156,29 @@ pub fn parse_key<I: Iterator<Item = u8>>(bytes: &mut I) -> Key {
         b'\n' | b'\r' => Key::Enter,
         127 | 8 => Key::Backspace,
         3 => Key::Interrupt,
-        _ => Key::Char(b as char),
+        0x20..=0x7E => Key::Char(b as char),
+        0xC2..=0xF4 => parse_utf8(b, bytes),
+        _ => Key::Ignore,
+    }
+}
+
+// rest of a multibyte UTF-8 char after its lead byte
+fn parse_utf8<I: Iterator<Item = u8>>(lead: u8, bytes: &mut I) -> Key {
+    let n = match lead {
+        0xF0.. => 4,
+        0xE0.. => 3,
+        _ => 2,
+    };
+    let mut enc = [lead, 0, 0, 0];
+    for i in 1..n {
+        match bytes.next() {
+            Some(c) if c & 0xC0 == 0x80 => enc[i] = c,
+            _ => return Key::Ignore,
+        }
+    }
+    match std::str::from_utf8(&enc[..n]).ok().and_then(|s| s.chars().next()) {
+        Some(c) if !c.is_control() => Key::Char(c),
+        _ => Key::Ignore,
     }
 }
 
@@ -391,5 +436,85 @@ mod tests {
     #[test]
     fn render_empty() {
         assert_eq!(LineEditor::new().render('Z'), "\rZ \x1b[K");
+    }
+
+    // apply the editing keys the REPL thread handles
+    fn feed(ed: &mut LineEditor, bytes: &[u8]) {
+        let mut it = bytes.iter().copied();
+        while it.len() > 0 {
+            match parse_key(&mut it) {
+                Key::Char(c) => ed.insert(c),
+                Key::Backspace => ed.backspace(),
+                Key::Delete => ed.delete(),
+                Key::Left => ed.left(),
+                Key::Right => ed.right(),
+                Key::Home => ed.home(),
+                Key::End => ed.end(),
+                _ => (),
+            }
+            assert!(ed.cursor() <= ed.len());
+        }
+    }
+
+    #[test]
+    fn parse_utf8_chars() {
+        assert_eq!(keys("é".as_bytes()), vec![Key::Char('é')]);
+        assert_eq!(keys("€".as_bytes()), vec![Key::Char('€')]);
+        assert_eq!(keys("🥁a".as_bytes()), vec![Key::Char('🥁'), Key::Char('a')]);
+    }
+
+    #[test]
+    fn parse_bad_utf8_and_control_bytes_ignored() {
+        // stray continuation byte, invalid lead, truncated char
+        assert_eq!(keys(&[0xA9, b'a']), vec![Key::Ignore, Key::Char('a')]);
+        assert_eq!(keys(&[0xFF, b'a']), vec![Key::Ignore, Key::Char('a')]);
+        assert_eq!(keys(&[0xC3]), vec![Key::Ignore]);
+        // tab, ctrl-d, NUL
+        assert_eq!(keys(&[9, 4, 0]), vec![Key::Ignore, Key::Ignore, Key::Ignore]);
+    }
+
+    #[test]
+    fn non_ascii_editing_never_panics() {
+        let mut ed = LineEditor::new();
+        feed(&mut ed, &[0xC3, 0xA9, b'a']);
+        assert_eq!(ed.buf(), "éa");
+        assert_eq!(ed.cursor(), 2);
+
+        feed(&mut ed, &[27, b'[', b'D']); // left
+        feed(&mut ed, "ü".as_bytes());
+        assert_eq!(ed.buf(), "éüa");
+        assert_eq!(ed.cursor(), 2);
+
+        feed(&mut ed, &[127, 127]);
+        assert_eq!(ed.buf(), "a");
+        assert_eq!(ed.cursor(), 0);
+
+        feed(&mut ed, &[27, b'[', b'C', 27, b'[', b'C', 27, b'[', b'D']);
+        assert_eq!(ed.cursor(), 0);
+        feed(&mut ed, "é".as_bytes());
+        feed(&mut ed, &[27, b'[', b'3', b'~']); // delete 'a'
+        assert_eq!(ed.buf(), "é");
+        assert_eq!(ed.cursor(), 1);
+    }
+
+    #[test]
+    fn control_bytes_stay_out_of_buffer() {
+        let mut ed = LineEditor::new();
+        feed(&mut ed, &[b'a', 9, 4, b'b']);
+        assert_eq!(ed.buf(), "ab");
+        ed.insert('\t');
+        assert_eq!(ed.buf(), "ab");
+    }
+
+    #[test]
+    fn non_ascii_set_and_render_count_chars() {
+        let mut ed = LineEditor::new();
+        ed.set("éé".to_string());
+        assert_eq!(ed.cursor(), 2);
+        assert_eq!(ed.render('>'), "\r> éé\x1b[K");
+        ed.home();
+        assert_eq!(ed.render('>'), "\r> éé\x1b[K\x1b[2D");
+        ed.end();
+        assert_eq!(ed.cursor(), 2);
     }
 }
