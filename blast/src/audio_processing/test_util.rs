@@ -7,7 +7,7 @@ use std::{collections::HashMap, ffi::c_void};
 
 use alsa_sys::snd_pcm_channel_area_t;
 
-use crate::audio_processing::commands::{CmdProcessor, EngineState};
+use crate::audio_processing::commands::{CmdProcessor, EngineState, Parsed};
 use crate::audio_processing::engine::Conductor;
 use crate::file_parsing::decode_helpers::AudioFile;
 
@@ -57,8 +57,9 @@ pub fn setup(channels: usize, tracks: Vec<AudioFile>) -> (CmdProcessor, Conducto
 // parse a command line and apply it to the Conductor;
 // panics if the command doesn't parse
 pub fn run(cp: &mut CmdProcessor, conductor: &mut Conductor, cmd: &str) {
-    match cp.parse(cmd.to_string()) {
-        Ok(command) => conductor.apply(command),
+    match cp.parse(cmd) {
+        Ok(Parsed::Engine(command)) => conductor.apply(command),
+        Ok(Parsed::Local(_)) => (),
         Err(error) => panic!("'{}' failed: {}", cmd, error),
     }
 }

@@ -188,7 +188,9 @@ mod tests {
             blast_time::{TempoMode, TempoUnit},
             sample_rate,
         },
-        commands::{CmdProcessor, Command, EngineState, Idx, SeqArgs, StartArgs, TempoRepr},
+        commands::{
+            CmdProcessor, Command, EngineState, Idx, Parsed, SeqArgs, StartArgs, TempoRepr,
+        },
         engine::Conductor,
         test_util::{conductor, pcm, render},
     };
@@ -211,8 +213,9 @@ mod tests {
         let mut cp = CmdProcessor::new(EngineState::new(vec![kick()], 1));
         let mut c = conductor(1, vec![kick()]);
         for cmd in cmds {
-            match cp.parse(cmd.to_string()) {
-                Ok(command) => c.apply(command),
+            match cp.parse(cmd) {
+                Ok(Parsed::Engine(command)) => c.apply(command),
+                Ok(Parsed::Local(_)) => (),
                 Err(e) => panic!("'{}' failed: {}", cmd, e),
             }
         }
