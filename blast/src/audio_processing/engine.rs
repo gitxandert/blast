@@ -304,6 +304,13 @@ pub struct VoiceState {
     pub tempo: Rc<RefCell<TempoState>>,
 }
 
+impl VoiceState {
+    // whether position is within the playable frames 0..=end
+    fn in_bounds(&self) -> bool {
+        self.position >= 0.0 && self.position <= self.end as f32
+    }
+}
+
 // instead of samples, Voices have a Function,
 // which are either some type of Wave or a collection of samples
 enum Function {
@@ -454,10 +461,13 @@ impl Voice {
 
         let state = &mut self.state;
 
-        let idx = state.position as usize;
-        if idx >= state.end || idx < 0 {
+        // plays frames 0..=end in either direction; check the f32
+        // position before casting, since a negative position
+        // would saturate to 0 as usize
+        if !state.in_bounds() {
             return;
         }
+        let idx = state.position as usize;
 
         // if there are more output channels than the track has
         // recorded into, then skip putting info into the extra
@@ -481,7 +491,9 @@ impl Voice {
         let s0 = self.samples[(idx * self.channels) + (ch % self.channels)] as f32;
         if state.velocity != 1.0 {
             let frac = state.position.fract();
-            let s1 = self.samples[((idx + 1) * self.channels) + (ch % self.channels)] as f32;
+            // the last frame has no next frame to interpolate toward
+            let next = if idx < state.end { idx + 1 } else { idx };
+            let s1 = self.samples[(next * self.channels) + (ch % self.channels)] as f32;
             sample = s0 * (1.0 - frac) + s1 * frac;
         } else {
             sample = s0;
@@ -498,7 +510,8 @@ impl Voice {
 
         let state = &mut self.state;
 
-        if state.position as usize >= state.end {
+        // stop moving once playback has run off either end
+        if !state.in_bounds() {
             return;
         }
 
@@ -750,6 +763,41 @@ mod tests {
         let expected: Vec<i16> = (0..10).flat_map(|s| [s, -s]).collect();
         assert_eq!(out, expected);
         assert_eq!(c.voices[0].state.position, 10.0);
+    }
+
+    // mono [10,20,30,40,50] at 1 output channel with velocity `vel`
+    fn render_at_velocity(vel: f32, frames: usize) -> Vec<i16> {
+        let af = AudioFile::new("v", "wav", 48000, 1, 16, vec![10, 20, 30, 40, 50]);
+        let mut c = one_voice(1, af, tempo(TempoMode::Voice, 100.0));
+        c.apply(Command::Velocity(VelocityArgs { idx: 0, val: vel }));
+        start_voice(&mut c, 0);
+        render(&mut c, 1, frames)
+    }
+
+    #[test]
+    fn forward_playback_plays_every_frame_then_stops() {
+        assert_eq!(render_at_velocity(1.0, 8), vec![10, 20, 30, 40, 50, 0, 0, 0]);
+    }
+
+    #[test]
+    fn reverse_playback_plays_every_frame_then_stops() {
+        assert_eq!(render_at_velocity(-1.0, 8), vec![50, 40, 30, 20, 10, 0, 0, 0]);
+    }
+
+    #[test]
+    fn half_speed_interpolates() {
+        assert_eq!(
+            render_at_velocity(0.5, 11),
+            vec![10, 15, 20, 25, 30, 35, 40, 45, 50, 0, 0]
+        );
+    }
+
+    #[test]
+    fn reverse_half_speed_interpolates() {
+        assert_eq!(
+            render_at_velocity(-0.5, 11),
+            vec![50, 45, 40, 35, 30, 25, 20, 15, 10, 0, 0]
+        );
     }
 
     #[test]
