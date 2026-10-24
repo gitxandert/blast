@@ -11,7 +11,7 @@ Phases: 0 not started · 1 planning · 2 wave 1 · 3 wave 2 · 4 wave 3 · 5 wav
 
 | Task | Brief | Wave | Plan | Implementation | Notes |
 |---|---|---|---|---|---|
-| F1 | PB | 1 | approved (F1a,b; fixes pending) | none | |
+| F1 | PB | 1 | approved (F1a,b) | F1a: in-review (architect), task/F1a @ 510d020; F1b: none | |
 | C1 | PA | 1 | approved (fixes pending) | none | |
 | E1 | PA | 2 | none | none | expected to split into E1a/b/c |
 | LOAD | PB | 2 | draft | none | |
