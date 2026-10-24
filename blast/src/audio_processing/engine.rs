@@ -48,6 +48,23 @@ impl Conductor {
             let areas = std::slice::from_raw_parts(areas_ptr, self.out_channels);
 
             for f in 0..frames {
+                // per-frame work (processes, tempos) runs once
+                // per frame, not once per channel
+                for voice in &mut self.voices {
+                    voice.tick();
+                }
+
+                for group in &mut self.groups {
+                    group.tick();
+                }
+
+                // TempoContexts belong to the Conductor; ticked here,
+                // outside the Voice/Group loops, so nothing else
+                // holds a borrow of them
+                for tc in &self.tempo_cons {
+                    tc.borrow_mut().update(1.0);
+                }
+
                 for ch in 0..self.out_channels {
                     let a = &areas[ch];
                     let base = a.addr as *mut u8;
@@ -57,22 +74,35 @@ impl Conductor {
                     let byte_offset = bit_offset / 8;
 
                     let sample_ptr = base.offset(byte_offset) as *mut i16;
-            
-                    unsafe {
-                        *sample_ptr = 0;
-                    }
+
+                    // mix in f32 and clip once on write, so summing
+                    // Voices can't overflow i16
+                    let mut mix = 0f32;
 
                     for voice in &mut self.voices {
                         if voice.state.active {
-                            voice.process(sample_ptr, f, ch);
+                            voice.process(&mut mix, f, ch);
                         }
                     }
 
                     for group in &mut self.groups {
                         if group.state.active {
-                            group.process(sample_ptr, f, ch);
+                            group.process(&mut mix, f, ch);
                         }
                     }
+
+                    unsafe {
+                        *sample_ptr = mix.clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+                    }
+                }
+
+                // advance once per frame, after every channel is mixed
+                for voice in &mut self.voices {
+                    voice.advance();
+                }
+
+                for group in &mut self.groups {
+                    group.advance();
                 }
 
                 clock::advance(1);
@@ -242,6 +272,9 @@ impl Conductor {
             Idx::Group(g) => {
                 let group: &mut Group = self.groups.get_mut(g).unwrap();
                 group.processes.push(Process::Seq(Seq { state }));
+                if args.tempo.mode == TempoMode::Process {
+                    group.proc_tempi.push(tempo);
+                }
             }
             _ => (), // will only be Voice or Group
         }
@@ -283,6 +316,13 @@ pub struct VoiceState {
     pub velocity: f32,
     pub gain: f32,
     pub tempo: Rc<RefCell<TempoState>>,
+}
+
+impl VoiceState {
+    // whether position is within the playable frames 0..=end
+    fn in_bounds(&self) -> bool {
+        self.position >= 0.0 && self.position <= self.end as f32
+    }
 }
 
 // instead of samples, Voices have a Function,
@@ -404,7 +444,9 @@ impl Voice {
         };
     }
 
-    fn process(&mut self, acc: *mut i16, frame: u64, mut ch: usize) {
+    // run Processes and update TempoStates;
+    // called once per frame, before process()
+    fn tick(&mut self) {
         if !self.state.active { return; }
 
         let state = &mut self.state;
@@ -424,11 +466,22 @@ impl Voice {
             let mut ts = tempo_state.borrow_mut();
             ts.update(1.0);
         }
+    }
 
-        let idx = state.position as usize;
-        if idx >= state.end || idx < 0 {
+    // mix one channel of the current frame into acc;
+    // called once per channel
+    fn process(&mut self, acc: &mut f32, frame: u64, mut ch: usize) {
+        if !self.state.active { return; }
+
+        let state = &mut self.state;
+
+        // plays frames 0..=end in either direction; check the f32
+        // position before casting, since a negative position
+        // would saturate to 0 as usize
+        if !state.in_bounds() {
             return;
         }
+        let idx = state.position as usize;
 
         // if there are more output channels than the track has
         // recorded into, then skip putting info into the extra
@@ -452,20 +505,29 @@ impl Voice {
         let s0 = self.samples[(idx * self.channels) + (ch % self.channels)] as f32;
         if state.velocity != 1.0 {
             let frac = state.position.fract();
-            let s1 = self.samples[((idx + 1) * self.channels) + (ch % self.channels)] as f32;
+            // the last frame has no next frame to interpolate toward
+            let next = if idx < state.end { idx + 1 } else { idx };
+            let s1 = self.samples[(next * self.channels) + (ch % self.channels)] as f32;
             sample = s0 * (1.0 - frac) + s1 * frac;
         } else {
             sample = s0;
         }
 
-        unsafe {
-            *acc += (sample * state.gain) as i16;
+        *acc += sample * state.gain;
+    }
+
+    // move position; called once per frame, after process()
+    fn advance(&mut self) {
+        if !self.state.active { return; }
+
+        let state = &mut self.state;
+
+        // stop moving once playback has run off either end
+        if !state.in_bounds() {
+            return;
         }
 
-        // advance
-        if ch == self.channels - 1 {
-            state.position += state.velocity;
-        }
+        state.position += state.velocity;
     }
 }
 
@@ -479,6 +541,7 @@ pub struct Group {
     pub state: GroupState, 
     pub voices: Vec<Voice>,
     pub processes: Vec<Process>,
+    proc_tempi: Vec<Rc<RefCell<TempoState>>>, // TempoMode::Process
 }
 
 impl Group {
@@ -493,6 +556,7 @@ impl Group {
             state,
             voices,
             processes: Vec::<Process>::new(),
+            proc_tempi: Vec::<Rc<RefCell<TempoState>>>::new(),
         }
     }
 
@@ -514,6 +578,14 @@ impl Group {
 
         for voice in &mut self.voices {
             voice.start();
+        }
+
+        for p in &mut self.processes {
+            p.reset();
+        }
+
+        for tempo_state in &mut self.proc_tempi {
+            tempo_state.borrow_mut().start();
         }
     }
 
@@ -541,6 +613,14 @@ impl Group {
             voice.state.active = false;
         }
                 
+        for p in &mut self.processes {
+            p.reset();
+        }
+
+        for tempo_state in &self.proc_tempi {
+            tempo_state.borrow_mut().stop();
+        }
+
         let mut ts = self.state.tempo.borrow_mut();
         if ts.mode == TempoMode::Group {
             ts.active = false;
@@ -548,17 +628,369 @@ impl Group {
         }
     }
 
-    fn process(&mut self, acc: *mut i16, frame: u64, mut ch: usize) {
+    // run Voices, own Processes and TempoStates;
+    // called once per frame
+    fn tick(&mut self) {
         if !self.state.active { return; }
 
-        // processing
         for v in &mut self.voices {
-            v.process(acc, frame, ch);
+            v.tick();
+        }
+
+        for p in &mut self.processes {
+            p.process_group(&mut self.voices);
         }
 
         let mut ts = self.state.tempo.borrow_mut();
         if ts.mode == TempoMode::Group {
             ts.update(1.0);
         }
+
+        for tempo_state in &self.proc_tempi {
+            tempo_state.borrow_mut().update(1.0);
+        }
+    }
+
+    // mix one channel of the current frame into acc
+    fn process(&mut self, acc: &mut f32, frame: u64, mut ch: usize) {
+        if !self.state.active { return; }
+
+        for v in &mut self.voices {
+            v.process(acc, frame, ch);
+        }
+    }
+
+    // advance Voices; called once per frame
+    fn advance(&mut self) {
+        if !self.state.active { return; }
+
+        for v in &mut self.voices {
+            v.advance();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio_processing::test_util::{conductor, render};
+
+    // interleaved track of `frames` frames where every sample is `val`
+    fn track(name: &str, channels: u32, frames: usize, val: i16) -> AudioFile {
+        AudioFile::new(name, "wav", 48000, channels, 16, vec![val; frames * channels as usize])
+    }
+
+    fn tempo(mode: TempoMode, interval: f32) -> TempoRepr {
+        TempoRepr {
+            idx: 0,
+            owned: true,
+            mode,
+            unit: TempoUnit::Samples,
+            interval,
+        }
+    }
+
+    // Conductor with one loaded (not started) Voice
+    fn one_voice(out_channels: usize, af: AudioFile, tr: TempoRepr) -> Conductor {
+        sample_rate::set(48000);
+        let mut c = conductor(out_channels, vec![af]);
+        c.apply(Command::Load(LoadArgs { track_idx: 0, tempo_repr: tr }));
+        c
+    }
+
+    fn start_voice(c: &mut Conductor, idx: usize) {
+        c.apply(Command::Start(StartArgs { idx: Idx::Voice(idx) }));
+    }
+
+    fn voice_tempo_ticks_once_per_frame(channels: usize) {
+        let mut c = one_voice(channels, track("t", channels as u32, 2000, 100), tempo(TempoMode::Voice, 100.0));
+        start_voice(&mut c, 0);
+
+        render(&mut c, channels, 1000);
+
+        assert_eq!(c.voices[0].state.tempo.borrow().current, 1000);
+        assert_eq!(c.voices[0].state.position, 1000.0);
+    }
+
+    #[test]
+    fn voice_tempo_ticks_once_per_frame_stereo() {
+        voice_tempo_ticks_once_per_frame(2);
+    }
+
+    #[test]
+    fn voice_tempo_ticks_once_per_frame_mono() {
+        voice_tempo_ticks_once_per_frame(1);
+    }
+
+    #[test]
+    fn group_tempo_ticks_once_per_frame() {
+        let mut c = one_voice(2, track("t", 2, 2000, 100), tempo(TempoMode::Voice, 100.0));
+        c.apply(Command::Group(GroupArgs {
+            tempo: tempo(TempoMode::Group, 100.0),
+            vs_fs_ps: vec![(0, true, Vec::new())],
+        }));
+        c.apply(Command::Start(StartArgs { idx: Idx::Group(0) }));
+
+        render(&mut c, 2, 1000);
+
+        let g = &c.groups[0];
+        assert_eq!(g.state.tempo.borrow().current, 1000);
+        assert_eq!(g.voices[0].state.position, 1000.0);
+    }
+
+    #[test]
+    fn voice_start_pause_resume_stop() {
+        let mut c = one_voice(2, track("t", 2, 2000, 100), tempo(TempoMode::Voice, 100.0));
+        assert!(!c.voices[0].state.active);
+
+        start_voice(&mut c, 0);
+        assert!(c.voices[0].state.active);
+        assert!(c.voices[0].state.tempo.borrow().active);
+        render(&mut c, 2, 10);
+        assert_eq!(c.voices[0].state.position, 10.0);
+
+        c.apply(Command::Pause(PauseArgs { idx: Idx::Voice(0) }));
+        assert!(!c.voices[0].state.active);
+        // paused Voices don't advance or output
+        let out = render(&mut c, 2, 10);
+        assert_eq!(c.voices[0].state.position, 10.0);
+        assert!(out.iter().all(|&s| s == 0));
+
+        c.apply(Command::Resume(ResumeArgs { idx: Idx::Voice(0) }));
+        assert!(c.voices[0].state.active);
+        render(&mut c, 2, 10);
+        assert_eq!(c.voices[0].state.position, 20.0);
+
+        c.apply(Command::Stop(StopArgs { idx: Idx::Voice(0) }));
+        assert!(!c.voices[0].state.active);
+        assert_eq!(c.voices[0].state.position, 0.0);
+        assert_eq!(c.voices[0].state.tempo.borrow().current, 0);
+        assert!(!c.voices[0].state.tempo.borrow().active);
+
+        // start resets position and tempo
+        start_voice(&mut c, 0);
+        render(&mut c, 2, 10);
+        start_voice(&mut c, 0);
+        assert_eq!(c.voices[0].state.position, 0.0);
+        assert_eq!(c.voices[0].state.tempo.borrow().current, 0);
+    }
+
+    #[test]
+    fn mono_voice_on_stereo_advances_once_per_frame() {
+        let af = AudioFile::new("m", "wav", 48000, 1, 16, (0..100).collect());
+        let mut c = one_voice(2, af, tempo(TempoMode::Voice, 100.0));
+        start_voice(&mut c, 0);
+
+        let out = render(&mut c, 2, 10);
+
+        // each mono sample is duplicated across ch0/ch1
+        let expected: Vec<i16> = (0..10).flat_map(|s| [s, s]).collect();
+        assert_eq!(out, expected);
+        assert_eq!(c.voices[0].state.position, 10.0);
+    }
+
+    #[test]
+    fn stereo_voice_on_stereo_keeps_channels() {
+        // L = frame index, R = -frame index
+        let samples: Vec<i16> = (0..100).flat_map(|s| [s, -s]).collect();
+        let af = AudioFile::new("s", "wav", 48000, 2, 16, samples);
+        let mut c = one_voice(2, af, tempo(TempoMode::Voice, 100.0));
+        start_voice(&mut c, 0);
+
+        let out = render(&mut c, 2, 10);
+
+        let expected: Vec<i16> = (0..10).flat_map(|s| [s, -s]).collect();
+        assert_eq!(out, expected);
+        assert_eq!(c.voices[0].state.position, 10.0);
+    }
+
+    // mono [10,20,30,40,50] at 1 output channel with velocity `vel`
+    fn render_at_velocity(vel: f32, frames: usize) -> Vec<i16> {
+        let af = AudioFile::new("v", "wav", 48000, 1, 16, vec![10, 20, 30, 40, 50]);
+        let mut c = one_voice(1, af, tempo(TempoMode::Voice, 100.0));
+        c.apply(Command::Velocity(VelocityArgs { idx: 0, val: vel }));
+        start_voice(&mut c, 0);
+        render(&mut c, 1, frames)
+    }
+
+    #[test]
+    fn forward_playback_plays_every_frame_then_stops() {
+        assert_eq!(render_at_velocity(1.0, 8), vec![10, 20, 30, 40, 50, 0, 0, 0]);
+    }
+
+    #[test]
+    fn reverse_playback_plays_every_frame_then_stops() {
+        assert_eq!(render_at_velocity(-1.0, 8), vec![50, 40, 30, 20, 10, 0, 0, 0]);
+    }
+
+    #[test]
+    fn half_speed_interpolates() {
+        assert_eq!(
+            render_at_velocity(0.5, 11),
+            vec![10, 15, 20, 25, 30, 35, 40, 45, 50, 0, 0]
+        );
+    }
+
+    #[test]
+    fn reverse_half_speed_interpolates() {
+        assert_eq!(
+            render_at_velocity(-0.5, 11),
+            vec![50, 45, 40, 35, 30, 25, 20, 15, 10, 0, 0]
+        );
+    }
+
+    // two started mono Voices of constant `a` and `b` on 1 output channel
+    fn render_two_voices(a: i16, b: i16) -> Vec<i16> {
+        sample_rate::set(48000);
+        let mut c = conductor(1, vec![track("a", 1, 100, a), track("b", 1, 100, b)]);
+        // track order comes from a HashMap, so look the indices up
+        let ia = c.tracks.iter().position(|t| t.file_name == "a").unwrap();
+        let ib = c.tracks.iter().position(|t| t.file_name == "b").unwrap();
+        c.apply(Command::Load(LoadArgs { track_idx: ia, tempo_repr: tempo(TempoMode::Voice, 100.0) }));
+        c.apply(Command::Load(LoadArgs { track_idx: ib, tempo_repr: tempo(TempoMode::Voice, 100.0) }));
+        start_voice(&mut c, 0);
+        start_voice(&mut c, 1);
+        render(&mut c, 1, 10)
+    }
+
+    #[test]
+    fn mix_clips_at_i16_max() {
+        assert!(render_two_voices(30000, 30000).iter().all(|&s| s == i16::MAX));
+    }
+
+    #[test]
+    fn mix_clips_at_i16_min() {
+        assert!(render_two_voices(-30000, -30000).iter().all(|&s| s == i16::MIN));
+    }
+
+    #[test]
+    fn mix_sums_small_values_exactly() {
+        assert!(render_two_voices(1000, 2000).iter().all(|&s| s == 3000));
+        assert!(render_two_voices(1000, -3000).iter().all(|&s| s == -2000));
+    }
+
+    #[test]
+    fn tempo_context_ticks_once_per_frame_while_active() {
+        sample_rate::set(48000);
+        let mut c = conductor(2, vec![track("t", 2, 2000, 100)]);
+        c.apply(Command::Tc(TcArgs { tempo: tempo(TempoMode::Context, 100.0) }));
+        // a Voice synced to the context shares its TempoState
+        let mut synced = tempo(TempoMode::Context, 100.0);
+        synced.owned = false;
+        c.apply(Command::Load(LoadArgs { track_idx: 0, tempo_repr: synced }));
+
+        // not started yet
+        render(&mut c, 2, 10);
+        assert_eq!(c.tempo_cons[0].borrow().current, 0);
+
+        c.apply(Command::Start(StartArgs { idx: Idx::Tempo(0) }));
+        start_voice(&mut c, 0);
+        render(&mut c, 2, 100);
+        assert_eq!(c.tempo_cons[0].borrow().current, 100);
+        assert_eq!(c.voices[0].state.tempo.borrow().current, 100);
+
+        c.apply(Command::Pause(PauseArgs { idx: Idx::Tempo(0) }));
+        render(&mut c, 2, 50);
+        assert_eq!(c.tempo_cons[0].borrow().current, 100);
+
+        c.apply(Command::Resume(ResumeArgs { idx: Idx::Tempo(0) }));
+        render(&mut c, 2, 50);
+        assert_eq!(c.tempo_cons[0].borrow().current, 150);
+
+        c.apply(Command::Stop(StopArgs { idx: Idx::Tempo(0) }));
+        render(&mut c, 2, 50);
+        assert_eq!(c.tempo_cons[0].borrow().current, 0);
+    }
+
+    // Group of two mono Voices (samples = frame index) with a Seq
+    // that retriggers on steps 0 and 2 of a 4-step period at s:100
+    fn group_with_seq(seq_tempo: TempoRepr) -> Conductor {
+        sample_rate::set(48000);
+        let mut c = conductor(1, vec![AudioFile::new("t", "wav", 48000, 1, 16, (0..1000).collect())]);
+        c.apply(Command::Load(LoadArgs { track_idx: 0, tempo_repr: tempo(TempoMode::Voice, 100.0) }));
+        c.apply(Command::Load(LoadArgs { track_idx: 0, tempo_repr: tempo(TempoMode::Voice, 100.0) }));
+        c.apply(Command::Group(GroupArgs {
+            tempo: tempo(TempoMode::Group, 100.0),
+            vs_fs_ps: vec![(1, true, Vec::new()), (0, true, Vec::new())],
+        }));
+        c.apply(Command::Seq(SeqArgs {
+            idx: Idx::Group(0),
+            tempo: seq_tempo,
+            period: 4,
+            steps: vec![0.0, 2.0],
+            chance: vec![100.0, 100.0],
+            jit: vec![0.0, 0.0],
+            rng: X128P::new(1),
+        }));
+        c.apply(Command::Start(StartArgs { idx: Idx::Group(0) }));
+        c
+    }
+
+    fn assert_group_seq_retriggers(mut c: Conductor) {
+        let out = render(&mut c, 1, 450);
+
+        // both Voices restart on frames 200 and 400
+        assert_eq!(out[199], 2 * 199);
+        assert_eq!(out[200], 0);
+        assert_eq!(out[201], 2 * 1);
+        assert_eq!(out[399], 2 * 199);
+        assert_eq!(out[400], 0);
+        for v in &c.groups[0].voices {
+            assert_eq!(v.state.position, 50.0);
+        }
+    }
+
+    #[test]
+    fn group_seq_with_own_tempo_retriggers_all_voices() {
+        assert_group_seq_retriggers(group_with_seq(tempo(TempoMode::Process, 100.0)));
+    }
+
+    #[test]
+    fn group_seq_on_group_tempo_retriggers_all_voices() {
+        let mut tr = tempo(TempoMode::Group, 100.0);
+        tr.owned = false;
+        assert_group_seq_retriggers(group_with_seq(tr));
+    }
+
+    #[test]
+    fn voice_seq_retriggers_voice() {
+        let af = AudioFile::new("t", "wav", 48000, 1, 16, (0..1000).collect());
+        let mut c = one_voice(1, af, tempo(TempoMode::Voice, 100.0));
+        c.apply(Command::Seq(SeqArgs {
+            idx: Idx::Voice(0),
+            tempo: tempo(TempoMode::Process, 100.0),
+            period: 4,
+            steps: vec![0.0, 2.0],
+            chance: vec![100.0, 100.0],
+            jit: vec![0.0, 0.0],
+            rng: X128P::new(1),
+        }));
+        start_voice(&mut c, 0);
+
+        let out = render(&mut c, 1, 450);
+        assert_eq!(out[199], 199);
+        assert_eq!(out[200], 0);
+        assert_eq!(out[400], 0);
+        assert_eq!(c.voices[0].state.position, 50.0);
+    }
+
+    #[test]
+    fn group_stop_stops_seq_tempo() {
+        let mut c = group_with_seq(tempo(TempoMode::Process, 100.0));
+        render(&mut c, 1, 10);
+        assert_eq!(c.groups[0].proc_tempi[0].borrow().current, 10);
+
+        c.apply(Command::Stop(StopArgs { idx: Idx::Group(0) }));
+        assert!(!c.groups[0].proc_tempi[0].borrow().active);
+        assert_eq!(c.groups[0].proc_tempi[0].borrow().current, 0);
+    }
+
+    #[test]
+    fn stereo_voice_mixes_its_samples() {
+        let mut c = one_voice(2, track("t", 2, 100, 1234), tempo(TempoMode::Voice, 100.0));
+        start_voice(&mut c, 0);
+
+        let out = render(&mut c, 2, 50);
+        assert!(out.iter().all(|&s| s == 1234));
     }
 }
