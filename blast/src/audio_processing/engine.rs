@@ -272,6 +272,9 @@ impl Conductor {
             Idx::Group(g) => {
                 let group: &mut Group = self.groups.get_mut(g).unwrap();
                 group.processes.push(Process::Seq(Seq { state }));
+                if args.tempo.mode == TempoMode::Process {
+                    group.proc_tempi.push(tempo);
+                }
             }
             _ => (), // will only be Voice or Group
         }
@@ -538,6 +541,7 @@ pub struct Group {
     pub state: GroupState, 
     pub voices: Vec<Voice>,
     pub processes: Vec<Process>,
+    proc_tempi: Vec<Rc<RefCell<TempoState>>>, // TempoMode::Process
 }
 
 impl Group {
@@ -552,6 +556,7 @@ impl Group {
             state,
             voices,
             processes: Vec::<Process>::new(),
+            proc_tempi: Vec::<Rc<RefCell<TempoState>>>::new(),
         }
     }
 
@@ -573,6 +578,14 @@ impl Group {
 
         for voice in &mut self.voices {
             voice.start();
+        }
+
+        for p in &mut self.processes {
+            p.reset();
+        }
+
+        for tempo_state in &mut self.proc_tempi {
+            tempo_state.borrow_mut().start();
         }
     }
 
@@ -600,6 +613,14 @@ impl Group {
             voice.state.active = false;
         }
                 
+        for p in &mut self.processes {
+            p.reset();
+        }
+
+        for tempo_state in &self.proc_tempi {
+            tempo_state.borrow_mut().stop();
+        }
+
         let mut ts = self.state.tempo.borrow_mut();
         if ts.mode == TempoMode::Group {
             ts.active = false;
@@ -607,7 +628,8 @@ impl Group {
         }
     }
 
-    // update Voices and own TempoState; called once per frame
+    // run Voices, own Processes and TempoStates;
+    // called once per frame
     fn tick(&mut self) {
         if !self.state.active { return; }
 
@@ -615,9 +637,17 @@ impl Group {
             v.tick();
         }
 
+        for p in &mut self.processes {
+            p.process_group(&mut self.voices);
+        }
+
         let mut ts = self.state.tempo.borrow_mut();
         if ts.mode == TempoMode::Group {
             ts.update(1.0);
+        }
+
+        for tempo_state in &self.proc_tempi {
+            tempo_state.borrow_mut().update(1.0);
         }
     }
 
@@ -870,6 +900,89 @@ mod tests {
         c.apply(Command::Stop(StopArgs { idx: Idx::Tempo(0) }));
         render(&mut c, 2, 50);
         assert_eq!(c.tempo_cons[0].borrow().current, 0);
+    }
+
+    // Group of two mono Voices (samples = frame index) with a Seq
+    // that retriggers on steps 0 and 2 of a 4-step period at s:100
+    fn group_with_seq(seq_tempo: TempoRepr) -> Conductor {
+        sample_rate::set(48000);
+        let mut c = conductor(1, vec![AudioFile::new("t", "wav", 48000, 1, 16, (0..1000).collect())]);
+        c.apply(Command::Load(LoadArgs { track_idx: 0, tempo_repr: tempo(TempoMode::Voice, 100.0) }));
+        c.apply(Command::Load(LoadArgs { track_idx: 0, tempo_repr: tempo(TempoMode::Voice, 100.0) }));
+        c.apply(Command::Group(GroupArgs {
+            tempo: tempo(TempoMode::Group, 100.0),
+            vs_fs_ps: vec![(1, true, Vec::new()), (0, true, Vec::new())],
+        }));
+        c.apply(Command::Seq(SeqArgs {
+            idx: Idx::Group(0),
+            tempo: seq_tempo,
+            period: 4,
+            steps: vec![0.0, 2.0],
+            chance: vec![100.0, 100.0],
+            jit: vec![0.0, 0.0],
+            rng: X128P::new(1),
+        }));
+        c.apply(Command::Start(StartArgs { idx: Idx::Group(0) }));
+        c
+    }
+
+    fn assert_group_seq_retriggers(mut c: Conductor) {
+        let out = render(&mut c, 1, 450);
+
+        // both Voices restart on frames 200 and 400
+        assert_eq!(out[199], 2 * 199);
+        assert_eq!(out[200], 0);
+        assert_eq!(out[201], 2 * 1);
+        assert_eq!(out[399], 2 * 199);
+        assert_eq!(out[400], 0);
+        for v in &c.groups[0].voices {
+            assert_eq!(v.state.position, 50.0);
+        }
+    }
+
+    #[test]
+    fn group_seq_with_own_tempo_retriggers_all_voices() {
+        assert_group_seq_retriggers(group_with_seq(tempo(TempoMode::Process, 100.0)));
+    }
+
+    #[test]
+    fn group_seq_on_group_tempo_retriggers_all_voices() {
+        let mut tr = tempo(TempoMode::Group, 100.0);
+        tr.owned = false;
+        assert_group_seq_retriggers(group_with_seq(tr));
+    }
+
+    #[test]
+    fn voice_seq_retriggers_voice() {
+        let af = AudioFile::new("t", "wav", 48000, 1, 16, (0..1000).collect());
+        let mut c = one_voice(1, af, tempo(TempoMode::Voice, 100.0));
+        c.apply(Command::Seq(SeqArgs {
+            idx: Idx::Voice(0),
+            tempo: tempo(TempoMode::Process, 100.0),
+            period: 4,
+            steps: vec![0.0, 2.0],
+            chance: vec![100.0, 100.0],
+            jit: vec![0.0, 0.0],
+            rng: X128P::new(1),
+        }));
+        start_voice(&mut c, 0);
+
+        let out = render(&mut c, 1, 450);
+        assert_eq!(out[199], 199);
+        assert_eq!(out[200], 0);
+        assert_eq!(out[400], 0);
+        assert_eq!(c.voices[0].state.position, 50.0);
+    }
+
+    #[test]
+    fn group_stop_stops_seq_tempo() {
+        let mut c = group_with_seq(tempo(TempoMode::Process, 100.0));
+        render(&mut c, 1, 10);
+        assert_eq!(c.groups[0].proc_tempi[0].borrow().current, 10);
+
+        c.apply(Command::Stop(StopArgs { idx: Idx::Group(0) }));
+        assert!(!c.groups[0].proc_tempi[0].borrow().active);
+        assert_eq!(c.groups[0].proc_tempi[0].borrow().current, 0);
     }
 
     #[test]
