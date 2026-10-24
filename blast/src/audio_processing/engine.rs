@@ -229,6 +229,7 @@ impl Conductor {
             jit: args.jit,
             rng: args.rng,
             idx: 0,
+            last: None,
         };
         
         match args.idx {
