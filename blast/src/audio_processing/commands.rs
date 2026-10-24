@@ -130,7 +130,7 @@ pub struct UnloadArgs {
 }
 
 pub struct VelocityArgs {
-    pub idx: usize,
+    pub idx: Idx,
     pub val: f32,
 }
 
@@ -166,11 +166,15 @@ pub struct QuitArgs {}
 
 // use for terse, ambiguous Commands like Start;
 // prefer Reprs when more info is required
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Idx {
     Tempo(usize),
     Voice(usize),
     Process(usize),
     Group(usize),
+    // a Voice inside a Group: (Group idx, Voice idx in that Group);
+    // Voice is only for Voices in Conductor.voices
+    GroupVoice(usize, usize),
     // don't need one for Track because TrackRepr is already
     // just an index, and there are few Commands that operate on
     // Tracks, so it'll never be ambiguous
@@ -563,11 +567,8 @@ impl CmdProcessor {
                 cmd: "velocity".to_string() 
             })?;
         
-        let vidx = self.get_idx("-v".to_string(), name.to_string())?;
-        let idx = match vidx {
-            Idx::Voice(i) => i,
-            _ => 0,
-        }; // this will match
+        // Idx::Voice or Idx::GroupVoice
+        let idx = self.get_idx("-v".to_string(), name.to_string())?;
 
         let val = args
             .next()
@@ -1151,10 +1152,11 @@ impl CmdProcessor {
         }
 
         // TODO: allow for Idx::Group
+        let owner = self.find_voice_idx(name.clone())?;
         let voice = self.find_voice(name.clone())?;
         let repr = ProcRepr::new(
             voice.processes.len(), 
-            Idx::Voice(voice.idx), 
+            owner, 
             Some(TempoRepr::clone(&tempo))
         );
         voice.processes.insert("seq".to_string(), repr);
@@ -1167,7 +1169,7 @@ impl CmdProcessor {
         }
 
         let args = SeqArgs {
-            idx: Idx::Voice(voice.idx),
+            idx: owner,
             tempo,
             period,
             steps,
@@ -1201,10 +1203,7 @@ impl CmdProcessor {
 
     fn get_idx(&mut self, ty: String, name: String) -> StateResult<Idx> {
         match ty.as_str() {
-            "-v" | "--voice" => {
-                let v = self.find_voice(name)?;
-                Ok(Idx::Voice(v.idx))
-            }
+            "-v" | "--voice" => self.find_voice_idx(name),
             "-g" | "--group" => {
                 let g = self.find_group(name)?;
                 Ok(Idx::Group(g.idx))
@@ -1269,6 +1268,18 @@ impl CmdProcessor {
                     });
                 }
             }
+        }
+    }
+
+    // engine Idx of a Voice named "voice" or "group.voice"
+    fn find_voice_idx(&mut self, name: String) -> StateResult<Idx> {
+        let v_idx = self.find_voice(name.clone())?.idx;
+        match name.split_once('.') {
+            Some((group, _)) => {
+                let g_idx = self.find_group(group.to_string())?.idx;
+                Ok(Idx::GroupVoice(g_idx, v_idx))
+            }
+            None => Ok(Idx::Voice(v_idx)),
         }
     }
 
@@ -1572,5 +1583,80 @@ mod tests {
         assert_eq!(v_idx(&cp, "b"), 0);
         assert!(cp.engine_state.voices.get("a").is_none());
         assert_eq!(cp.engine_state.groups.get("g").unwrap().idx, 0);
+    }
+
+    // addressing grouped voices (B04)
+
+    fn grouped(names: &[&str], group: &str) -> CmdProcessor {
+        let mut cp = processor(names);
+        for n in names {
+            ok(&mut cp, &format!("load {}", n));
+        }
+        ok(&mut cp, group);
+        cp
+    }
+
+    #[test]
+    fn velocity_targets_group_voice() {
+        let mut cp = grouped(&["a", "b", "c"], "group g -v a,b");
+        match ok(&mut cp, "velocity g.b 2") {
+            Command::Velocity(args) => {
+                assert_eq!(args.idx, Idx::GroupVoice(0, 1));
+                assert_eq!(args.val, 2.0);
+            }
+            _ => panic!("not a Velocity"),
+        }
+        match ok(&mut cp, "velocity c -1.5") {
+            Command::Velocity(args) => {
+                assert_eq!(args.idx, Idx::Voice(0));
+                assert_eq!(args.val, -1.5);
+            }
+            _ => panic!("not a Velocity"),
+        }
+        assert!(matches!(err(&mut cp, "velocity c"), CmdErr::MissingArg { .. }));
+        assert!(matches!(err(&mut cp, "velocity c x"), CmdErr::InvalidArg { .. }));
+    }
+
+    #[test]
+    fn start_targets_group_voice() {
+        let mut cp = grouped(&["a", "b"], "group g -v a,b");
+        for (cmd, want) in [
+            ("start -v g.a", Idx::GroupVoice(0, 0)),
+            ("pause -v g.b", Idx::GroupVoice(0, 1)),
+            ("start -g g", Idx::Group(0)),
+        ] {
+            let idx = match ok(&mut cp, cmd) {
+                Command::Start(args) => args.idx,
+                Command::Pause(args) => args.idx,
+                _ => panic!("unexpected Command"),
+            };
+            assert_eq!(idx, want, "{}", cmd);
+        }
+    }
+
+    #[test]
+    fn missing_group_voice_errors() {
+        let mut cp = grouped(&["a"], "group g -v a");
+        match err(&mut cp, "start -v g.zzz") {
+            CmdErr::NoVoice { name, group } => {
+                assert_eq!(name, "zzz");
+                assert_eq!(group, Some("g".to_string()));
+            }
+            other => panic!("wrong error {:?}", other),
+        }
+        assert!(matches!(err(&mut cp, "start -v nope.a"), CmdErr::NoItem { .. }));
+        assert!(matches!(err(&mut cp, "start -v a"), CmdErr::NoVoice { group: None, .. }));
+        assert!(matches!(err(&mut cp, "start -v g.a.b"), CmdErr::Formatting { .. }));
+    }
+
+    #[test]
+    fn seq_targets_group_voice() {
+        let mut cp = grouped(&["a", "b"], "group g -v a,b");
+        match ok(&mut cp, "seq g.b -s 0") {
+            Command::Seq(args) => assert_eq!(args.idx, Idx::GroupVoice(0, 1)),
+            _ => panic!("not a Seq"),
+        }
+        let gv = cp.engine_state.groups.get("g").unwrap().voices.get("b").unwrap();
+        assert_eq!(gv.processes.len(), 1);
     }
 }

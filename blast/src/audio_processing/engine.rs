@@ -113,6 +113,10 @@ impl Conductor {
                 let voice: &mut Voice = self.voices.get_mut(idx).unwrap();
                 voice.start();
             }
+            Idx::GroupVoice(g, v) => {
+                let voice: &mut Voice = self.groups[g].voices.get_mut(v).unwrap();
+                voice.start();
+            }
             Idx::Group(idx) => {
                 let group: &mut Group = self.groups.get_mut(idx).unwrap();
                 group.start();
@@ -129,6 +133,10 @@ impl Conductor {
         match args.idx {
             Idx::Voice(idx) => {
                 let voice: &mut Voice = self.voices.get_mut(idx).unwrap();
+                voice.pause();
+            }
+            Idx::GroupVoice(g, v) => {
+                let voice: &mut Voice = self.groups[g].voices.get_mut(v).unwrap();
                 voice.pause();
             }
             Idx::Group(idx) => {
@@ -149,6 +157,10 @@ impl Conductor {
                 let voice: &mut Voice = self.voices.get_mut(idx).unwrap();
                 voice.resume();
             }
+            Idx::GroupVoice(g, v) => {
+                let voice: &mut Voice = self.groups[g].voices.get_mut(v).unwrap();
+                voice.resume();
+            }
             Idx::Group(idx) => {
                 let group: &mut Group = self.groups.get_mut(idx).unwrap();
                 group.resume();
@@ -165,6 +177,10 @@ impl Conductor {
         match args.idx {
             Idx::Voice(idx) => {
                 let voice: &mut Voice = self.voices.get_mut(idx).unwrap();
+                voice.stop();
+            }
+            Idx::GroupVoice(g, v) => {
+                let voice: &mut Voice = self.groups[g].voices.get_mut(v).unwrap();
                 voice.stop();
             }
             Idx::Group(idx) => {
@@ -184,7 +200,11 @@ impl Conductor {
     }
 
     fn velocity(&mut self, args: VelocityArgs) {
-        let voice: &mut Voice = self.voices.get_mut(args.idx).unwrap();
+        let voice: &mut Voice = match args.idx {
+            Idx::Voice(v) => self.voices.get_mut(v).unwrap(),
+            Idx::GroupVoice(g, v) => self.groups[g].voices.get_mut(v).unwrap(),
+            _ => return, // will only be Voice or GroupVoice
+        };
         voice.state.velocity = args.val;
     }
 
@@ -229,7 +249,16 @@ impl Conductor {
     // Processes
     //
     fn seq(&mut self, args: SeqArgs) {
-        let tempo = self.tempo_from_repr(TempoRepr::clone(&args.tempo));
+        let tempo = match args.idx {
+            // a Voice/TBD reference is to the Seq's own Voice (-t v);
+            // tempo_from_repr only knows Conductor.voices, so take
+            // a grouped Voice's TempoState directly
+            Idx::GroupVoice(g, v) if !args.tempo.owned
+                && (args.tempo.mode == TempoMode::Voice || args.tempo.mode == TempoMode::TBD) => {
+                Rc::clone(&self.groups[g].voices[v].state.tempo)
+            }
+            _ => self.tempo_from_repr(TempoRepr::clone(&args.tempo)),
+        };
         let state = SeqState {
             active: true,
             tempo: Rc::clone(&tempo),
@@ -244,6 +273,13 @@ impl Conductor {
         match args.idx {
             Idx::Voice(v) => {
                 let voice: &mut Voice = self.voices.get_mut(v).unwrap();
+                voice.processes.push(Process::Seq(Seq { state }));
+                if args.tempo.mode == TempoMode::Process {
+                    voice.proc_tempi.push(tempo);
+                }
+            }
+            Idx::GroupVoice(g, v) => {
+                let voice: &mut Voice = self.groups[g].voices.get_mut(v).unwrap();
                 voice.processes.push(Process::Seq(Seq { state }));
                 if args.tempo.mode == TempoMode::Process {
                     voice.proc_tempi.push(tempo);
@@ -685,5 +721,61 @@ mod tests {
 
         let out = render(&mut c, 1, 4);
         assert_eq!(out[0], 120);
+    }
+
+    // addressing grouped voices (B04)
+
+    fn grouped() -> (CmdProcessor, Conductor) {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![
+            track("a", 1, 16), track("b", 2, 16), track("c", 3, 16),
+        ]);
+        run(&mut cp, &mut c, "load a");
+        run(&mut cp, &mut c, "load b -t b:120");
+        run(&mut cp, &mut c, "load c");
+        run(&mut cp, &mut c, "group g -v a,b");
+        (cp, c)
+    }
+
+    #[test]
+    fn velocity_reaches_group_voice() {
+        let (mut cp, mut c) = grouped();
+        run(&mut cp, &mut c, "velocity g.b 2");
+
+        assert_eq!(id(&c.groups[0].voices[1]), 2);
+        assert_eq!(c.groups[0].voices[1].state.velocity, 2.0);
+        assert_eq!(c.groups[0].voices[0].state.velocity, 1.0);
+        assert_eq!(c.voices[0].state.velocity, 1.0);
+
+        run(&mut cp, &mut c, "velocity c 0.5");
+        assert_eq!(c.voices[0].state.velocity, 0.5);
+    }
+
+    #[test]
+    fn start_stop_reach_group_voice() {
+        let (mut cp, mut c) = grouped();
+        run(&mut cp, &mut c, "start -v g.a");
+        assert!(c.groups[0].voices[0].state.active);
+        assert!(!c.groups[0].voices[1].state.active);
+        assert!(!c.voices[0].state.active);
+
+        run(&mut cp, &mut c, "pause -v g.a");
+        assert!(!c.groups[0].voices[0].state.active);
+        run(&mut cp, &mut c, "resume -v g.a");
+        assert!(c.groups[0].voices[0].state.active);
+        run(&mut cp, &mut c, "stop -v g.a");
+        assert!(!c.groups[0].voices[0].state.active);
+    }
+
+    #[test]
+    fn seq_reaches_group_voice() {
+        let (mut cp, mut c) = grouped();
+        run(&mut cp, &mut c, "seq g.b -t v -s 0");
+
+        let b = &c.groups[0].voices[1];
+        assert_eq!(b.processes.len(), 1);
+        assert!(Rc::ptr_eq(&seq_tempo(&b.processes[0]), &b.state.tempo));
+        assert!(c.groups[0].voices[0].processes.is_empty());
+        assert!(c.voices[0].processes.is_empty());
     }
 }
