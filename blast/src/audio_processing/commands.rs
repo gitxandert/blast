@@ -1040,13 +1040,16 @@ impl CmdProcessor {
                                                         cmd: "seq -c".to_string(),
                                                     })?;
                                         
+                                        let mut found = false;
                                         for i in {0..steps.len()} {
                                             let step = *steps.get(i).unwrap();
                                             if index == step {
                                                 chance[i] = chance_val;
+                                                found = true;
                                                 break;
                                             }
-                                            // only reaches here if index isn't found
+                                        }
+                                        if !found {
                                             return Err(CmdErr::Formatting {
                                                 err: "Invalid index for seq -c".to_string()
                                             });
@@ -1490,5 +1493,30 @@ mod tests {
     fn seq_rejects_zero_period() {
         assert!(matches!(seq_err("seq kick -p 0 -s 0"), CmdErr::InvalidArg { .. }));
         assert_eq!(seq_ok("seq kick -p 1 -s 0").period, 1);
+    }
+    #[test]
+    fn seq_chance_at_index() {
+        assert_eq!(seq_ok("seq kick -s 0,1,2 -c 2:50").chance, vec![100.0, 100.0, 50.0]);
+        assert_eq!(seq_ok("seq kick -s 0,1,2 -c 1:50").chance, vec![100.0, 50.0, 100.0]);
+        assert_eq!(seq_ok("seq kick -s 0,1,2 -c 0:50").chance, vec![50.0, 100.0, 100.0]);
+        assert_eq!(seq_ok("seq kick -s 0,1.5 -c 1.5:25").chance, vec![100.0, 25.0]);
+        assert!(matches!(seq_err("seq kick -s 0,1,2 -c 5:50"), CmdErr::Formatting { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1,2 -c x:50"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1,2 -c 1:x"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1,2 -c 1:2:3"), CmdErr::Formatting { .. }));
+    }
+
+    #[test]
+    fn seq_chance_all_positional_and_default() {
+        assert_eq!(seq_ok("seq kick -s 0,1,2").chance, vec![100.0, 100.0, 100.0]);
+        assert_eq!(seq_ok("seq kick -s 0,1,2 -c a:30").chance, vec![30.0, 30.0, 30.0]);
+        assert_eq!(seq_ok("seq kick -s 0,1,2 -c 10,20").chance, vec![10.0, 20.0, 100.0]);
+        assert_eq!(seq_ok("seq kick -s 0,1,2 -c 10,_,30").chance, vec![10.0, 100.0, 30.0]);
+        // extra values are ignored
+        assert_eq!(seq_ok("seq kick -s 0,1 -c 10,20,30").chance, vec![10.0, 20.0]);
+        assert!(matches!(seq_err("seq kick -s 0,1 -c x"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1 -c"), CmdErr::MissingArg { .. }));
+        // -c needs steps first
+        assert!(matches!(seq_err("seq kick -c 50 -s 0,1"), CmdErr::Formatting { .. }));
     }
 }
