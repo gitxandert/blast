@@ -26,6 +26,7 @@ use crate::audio_processing::{
         CmdQueue, CmdProcessor, Command, EngineState,
     },
     blast_time::{blast_time::clock, sample_rate},
+    line_editor::{LineEditor, Key, parse_key},
 };
 
 pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_channels: u32) {
@@ -38,15 +39,13 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
 
     // take over STDIN
     let marker = Arc::new(Mutex::new(0usize));
-    let buffer = Arc::new(Mutex::new(String::new()));
-    let cursor = Arc::new(Mutex::new(0usize));
+    let editor = Arc::new(Mutex::new(LineEditor::new()));
     let repl_chars = ['^', 'X', 'v', '>', 'X', '<', 'Z'];
 
     {
         let marker = marker.clone();
         let marker_for_mt = marker.clone();
-        let buffer = buffer.clone();
-        let cursor = cursor.clone();
+        let editor = editor.clone();
         let sr = sample_rate.clone();
 
         let mut width = 80usize;
@@ -63,24 +62,11 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
             }
         });
         thread::spawn(move || {
-            let mut last_len = 0;
             loop {
                 {
                     // redraw marker + input_text
                     let m = *marker.lock().unwrap();
-                    let buf = buffer.lock().unwrap();
-                    let curr_len = buf.len();
-                    print!("\r{} {} ", repl_chars[m], *buf);
-
-                    if last_len > curr_len {
-                        let diff = last_len - curr_len;
-                        for _ in 0..diff {
-                            print!(" ");
-                        }
-
-                        print!("\x1b[{}D", diff);
-                    }
-                    last_len = curr_len;
+                    print!("{}", editor.lock().unwrap().render(repl_chars[m]));
 
 /*
                     unsafe {
@@ -107,10 +93,6 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
                     
                     print!("\x1b[H");
   */
-                    let cur = *cursor.lock().unwrap();
-                    let diff = curr_len - cur;
-                    print!("\x1b[{}D", diff);
-
                     std::io::stdout().flush().unwrap();
                 }
                 thread::sleep(Duration::from_millis(15));
@@ -128,27 +110,24 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
     // REPL
     println!("");
     {
-        let buffer = buffer.clone();
-        let cursor = cursor.clone();
+        let editor = editor.clone();
         let queue = queue.clone();
 
         let mut cmd_history = Vec::<String>::new();
         let mut cmd_idx = cmd_history.len();
 
         thread::spawn(move || {
+            let mut input = std::iter::from_fn(|| Some(read_char()));
             loop {
-                let c = read_char();
-               
-                match c {
-                    b'\n' | b'\r' => {
+                let key = parse_key(&mut input);
+
+                match key {
+                    Key::Enter => {
                         // enter
                         print!("\n");
-                        let mut buf = buffer.lock().unwrap();
+                        let mut buf = editor.lock().unwrap();
 
-                        let mut cur = cursor.lock().unwrap();
-                        *cur = 0;
-
-                        let mut cmd = buf.clone();
+                        let cmd = buf.take();
                         cmd_history.push(cmd.clone());
                         cmd_idx = cmd_history.len();
 
@@ -170,82 +149,40 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
 
                         buf.clear();
                     }
-                    127 => {
-                        // backspace
-                        let mut buf = buffer.lock().unwrap();
-                        let mut cur = cursor.lock().unwrap();
-
-                        if !buf.is_empty() {
-                            if *cur > 0 {
-                                if *cur < buf.len() {
-                                    buf.remove(*cur);
-                                } else {
-                                    buf.remove(*cur - 1);
-                                }
-                                *cur -= 1;
-                            }
-                        }
+                    Key::Backspace => {
+                        editor.lock().unwrap().backspace();
                     }
-                    3 => {
+                    Key::Interrupt => {
                         // CTL + C
                         raw_mode("off");
-                        let mut buf = buffer.lock().unwrap();
-                        buf.clear();
+                        editor.lock().unwrap().clear();
                         println!("\nInterrupted.");
                         std::process::exit(130);
                     }
-                    27 => {
-                        // ESC
-                        let c2 = read_char();
-                        if c2 == b'[' {
-                            let c3 = read_char();
-                            match c3 {
-                                b'D' => { // left arrow
-                                    let mut cur = cursor.lock().unwrap();
-                                    if *cur > 0 { *cur -= 1; }
-                                }
-                                b'C' => { // right arrow
-                                    let buf = buffer.lock().unwrap();
-                                    let mut cur = cursor.lock().unwrap();
-                                    if *cur < buf.len() { *cur += 1; }
-                                }
-                                b'A' => { // up arrow
-                                    if cmd_idx > 0 {
-                                        cmd_idx -= 1;
-                                        let mut buf = buffer.lock().unwrap();
-                                        let mut cur = cursor.lock().unwrap();
-                                        buf.clear();
-                                        if let Some(prev) = cmd_history.get(cmd_idx) {
-                                            *buf = prev.clone();
-                                            *cur = buf.len();
-                                        }
-                                    }
-                                }
-                                b'B' => { // down arrow
-                                    if cmd_idx < cmd_history.len() {
-                                        cmd_idx += 1;
-                                        let mut buf = buffer.lock().unwrap();
-                                        let mut cur = cursor.lock().unwrap();
-                                        buf.clear();
-                                        if cmd_idx < cmd_history.len() {
-                                            if let Some(prev) = cmd_history.get(cmd_idx) {
-                                                *buf = prev.clone();
-                                                *cur = buf.len();
-                                            }
-                                        }
-                                    }
-                                }
-                                _ => (),
-                            }
-                            continue;
+                    Key::Delete => editor.lock().unwrap().delete(),
+                    Key::Home => editor.lock().unwrap().home(),
+                    Key::End => editor.lock().unwrap().end(),
+                    Key::Left => editor.lock().unwrap().left(),
+                    Key::Right => editor.lock().unwrap().right(),
+                    Key::Up => {
+                        if cmd_idx > 0 {
+                            cmd_idx -= 1;
+                            let prev = cmd_history.get(cmd_idx).cloned().unwrap_or_default();
+                            editor.lock().unwrap().set(prev);
                         }
                     }
-                    _ => {
-                        let mut buf = buffer.lock().unwrap();
-                        let mut cur = cursor.lock().unwrap();
-                        buf.insert(*cur, c as char);
-                        *cur += 1;
+                    Key::Down => {
+                        if cmd_idx < cmd_history.len() {
+                            cmd_idx += 1;
+                            // past the newest entry -> empty line
+                            let next = cmd_history.get(cmd_idx).cloned().unwrap_or_default();
+                            editor.lock().unwrap().set(next);
+                        }
                     }
+                    Key::Char(c) => {
+                        editor.lock().unwrap().insert(c);
+                    }
+                    Key::Ignore => (),
                 }
             }
         });
@@ -389,7 +326,7 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
         }
     }
 
-    buffer.lock().unwrap().clear();
+    editor.lock().unwrap().clear();
     raw_mode("off");
 }
 
