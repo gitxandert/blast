@@ -823,4 +823,39 @@ mod tests {
             }
         }
     }
+
+    // only voice-following processes move to the group tempo (B14)
+
+    #[test]
+    fn group_keeps_owned_seq_tempo() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("a", 1, 16)]);
+        run(&mut cp, &mut c, "load a");
+        // the voice-following seq goes first: until B22 gives each seq its
+        // own mirror key, the second seq overwrites the first one's ProcRepr
+        run(&mut cp, &mut c, "seq a -t v -s 0");
+        run(&mut cp, &mut c, "seq a -t b:140 -s 0");
+        let own = seq_tempo(&c.voices[0].processes[1]);
+        run(&mut cp, &mut c, "group g -v a");
+
+        let g = &c.groups[0];
+        let a = &g.voices[0];
+        assert!(Rc::ptr_eq(&a.state.tempo, &g.state.tempo));
+        let after = seq_tempo(&a.processes[1]);
+        assert!(Rc::ptr_eq(&after, &own));
+        assert!(!Rc::ptr_eq(&after, &g.state.tempo));
+        assert_eq!(after.borrow().mode, TempoMode::Process);
+    }
+
+    #[test]
+    fn group_repoints_voice_following_seq() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("a", 1, 16)]);
+        run(&mut cp, &mut c, "load a");
+        run(&mut cp, &mut c, "seq a -t v -s 0");
+        run(&mut cp, &mut c, "group g -v a");
+
+        let g = &c.groups[0];
+        assert!(Rc::ptr_eq(&seq_tempo(&g.voices[0].processes[0]), &g.state.tempo));
+    }
 }

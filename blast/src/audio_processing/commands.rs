@@ -745,10 +745,13 @@ impl CmdProcessor {
                     // Voice being added to a Group later)
                     match &process.tempo {
                         Some(t) => {
+                            // only re-point Processes that follow
+                            // the Voice; ones with their own (or a
+                            // shared) TempoState keep it
                             if t.mode == TempoMode::TBD {
                                 process.tempo = Some(TempoRepr::clone_from(&tempo, g_idx));
+                                p_i.push(process.idx);
                             }
-                            p_i.push(process.idx);
                         }
                         None => (),
                     }
@@ -1751,5 +1754,36 @@ mod tests {
                 assert_eq!(g.voices.get("c").unwrap().tempo.mode, TempoMode::Group);
             }
         }
+    }
+
+    // only voice-following processes move to the group tempo (B14)
+
+    #[test]
+    fn group_keeps_owned_process_tempos() {
+        let mut cp = processor(&["a"]);
+        ok(&mut cp, "load a");
+        ok(&mut cp, "seq a -t b:140 -s 0");
+        let args = group_args(ok(&mut cp, "group g -v a"));
+        let (_, follows, p_ids) = &args.vs_fs_ps[0];
+        assert!(*follows);
+        assert!(p_ids.is_empty());
+        let a = cp.engine_state.groups.get("g").unwrap().voices.get("a").unwrap();
+        let t = a.processes.get("seq").unwrap().tempo.as_ref().unwrap();
+        assert_eq!(t.mode, TempoMode::Process);
+    }
+
+    #[test]
+    fn group_moves_voice_following_processes() {
+        let mut cp = processor(&["a"]);
+        ok(&mut cp, "load a");
+        ok(&mut cp, "seq a -t v -s 0");
+        let args = group_args(ok(&mut cp, "group g -v a"));
+        let (_, _, p_ids) = &args.vs_fs_ps[0];
+        assert_eq!(p_ids, &vec![0]);
+        let a = cp.engine_state.groups.get("g").unwrap().voices.get("a").unwrap();
+        let t = a.processes.get("seq").unwrap().tempo.as_ref().unwrap();
+        assert_eq!(t.mode, TempoMode::Group);
+        assert!(!t.owned);
+        assert_eq!(t.idx, 0);
     }
 }
