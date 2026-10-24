@@ -27,3 +27,8 @@ Each entry records the date, the decision, and its source (a request ID, or
     Fundamental architectural changes need user approval.
 14. Organisation: user → architect + PM → planners → implementers, as defined
     in `ORG.md`. The user approves items one at a time.
+15. Effort levels: PM and architect run at high, planners and implementers at
+    medium. (`ORG.md` §7)
+16. Commit `plans/`. The PM has standing permission to commit `plans/`-only
+    snapshots to `dev` at gates and after each recorded decision.
+    (`ORG.md` §5)
