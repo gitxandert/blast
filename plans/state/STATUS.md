@@ -11,8 +11,8 @@ Phases: 0 not started · 1 planning · 2 wave 1 · 3 wave 2 · 4 wave 3 · 5 wav
 
 | Task | Brief | Wave | Plan | Implementation | Notes |
 |---|---|---|---|---|---|
-| F1 | PB | 1 | approved (F1a,b) | F1a: in-review (fix ffa3a2c); F1b: in-review, task/F1b @ edaf9b2 | |
-| C1 | PA | 1 | approved (fixes pending) | none | |
+| F1 | PB | 1 | approved (F1a,b) | merged (integrate/wave-1 @ 1d39902) | |
+| C1 | PA | 1 | approved (fixes applied) | in progress (PM), task/C1 | |
 | E1 | PA | 2 | none | none | expected to split into E1a/b/c |
 | LOAD | PB | 2 | draft | none | |
 | SH | PF | 2 | reviewed (SHa,b + SH-grammar; arch: approve w/ fixes) | none | grammar needs user approval |
@@ -37,7 +37,7 @@ Implementation states: none → scaffolded → dispatched → in-review (planner
 
 | Wave | Branch | Scaffolded | Tasks merged | Merged into dev |
 |---|---|---|---|---|
-| 1 | integrate/wave-1 | done (a224767: step 0 + id3v2; no other stubs needed) | 0/3 (C1, F1a, F1b) | no |
+| 1 | integrate/wave-1 | done (a224767: step 0 + id3v2; no other stubs needed) | 2/3 (F1a, F1b merged @ 1d39902; C1 pending) | no |
 | 2 | integrate/wave-2 | no | 0/3 | no |
 | 3 | integrate/wave-3 | no | 0/7 | no |
 | 4 | integrate/wave-4 | no | 0/6 | no |

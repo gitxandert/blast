@@ -324,6 +324,47 @@ The rest of the checklist passes:
 - Not reachable from `render`/`apply`.
 - One commit, `file_parsing: …`, with the trailer.
 - REQ-031 condition 4 list is present.
+
+**task/F1a @ ffa3a2c (re-review, 2026-10-24): passes.** The gap fill
+matches the fix: span `dur + trim_start + trim_end`, checked `time_base`
+conversion, 1 s cap per gap, and a gap counts as one packet plus one failed
+packet. `gap_frames_is_bounded` covers it. 191 tests pass with fixtures
+present. A gap that overflows maps to 0 frames, not 1 s, which is bounded and
+acceptable.
+
+**task/F1b @ edaf9b2 (2026-10-24): passes.**
+- 219 pass, with or without `.fixtures`.
+- `mp3_is_gapless` is exact, so the gap fill makes no false fills.
+- G.711 is done in `i32`, and the integer scaling equals symphonia's.
+- Indexing only on `chunks_exact` chunks and the length-checked 24-byte AU
+  header, so it can't panic.
+- 3 test deviations accepted (cross-checks in `fixture_tests.rs`; ADPCM
+  checked against the source length because ffmpeg ignores `fact` too; full
+  stems as names).
+- Speed: 0.321 s for 3 min of MP3.
+- Nit, not blocking: for a `.raw` file whose bytes start with `.snd`,
+  `decode_bytes` picks AU but `probe_file` picks raw. That's a 1-in-2^32
+  case; make the order consistent if the code is touched again.
+
+### Wave 1 merges (2026-10-24)
+In `/home/alexander-toth/rust_proj/blast-integrate`, `--no-ff`:
+- `d8d6509 merge: task/F1a` (from ffa3a2c)
+- `1d39902 merge: task/F1b` (from edaf9b2)
+- **Head `1d39902`.**
+Checks:
+- `cargo build`: 0 warnings.
+- `cargo test`: 219 passed, 1 ignored (`decode_speed_long_mp3`), with the
+  real assets and fixtures linked in, and 219 passed with `.fixtures` moved
+  away.
+- `cargo fmt --check`: clean.
+- clippy: no lints in `file_parsing/**`. It still errors on the pre-existing
+  deny-level `not_unsafe_ptr_arg_deref` at `engine.rs:40`. That's for E1;
+  put it in the wave-1 gate summary.
+I removed the temporary `blast/assets` symlink, and the fixtures are back in
+the main checkout.
+C1: applied my 4 fixes to `detailed/C1.md` (changelog entry), with line refs
+re-based on 1d39902. `task/C1` currently points at a224767 and must start
+from 1d39902.
 (one section per wave: merge order, results, issues)
 
 ## Clarifications to README (no change in meaning)
