@@ -17,6 +17,8 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.8
+# ISC is allowed in advance even though nothing uses it yet.
+unused-allowed-license = "allow"
 
 [licenses.private]
 # Our own crates are unlicensed and never published (publish = false).
