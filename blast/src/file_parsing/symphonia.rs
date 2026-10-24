@@ -89,6 +89,24 @@ fn default_track(reader: &dyn FormatReader) -> DecodeResult<TrackInfo> {
     track_info(track)
 }
 
+// `ticks` of `time_base` as frames at `rate`; None on overflow or without a time base
+fn ticks_to_frames(ticks: u64, time_base: Option<TimeBase>, rate: u32) -> Option<u64> {
+    let tb = time_base?;
+    let scaled = ticks
+        .checked_mul(u64::from(tb.numer.get()))?
+        .checked_mul(u64::from(rate))?;
+    Some(scaled / u64::from(tb.denom.get()))
+}
+
+/// Frames of silence for a timestamp gap the demuxer left (a packet it
+/// dropped, e.g. a FLAC frame with a bad CRC), capped at one second.
+fn gap_frames(gap: u64, time_base: Option<TimeBase>, rate: u32) -> usize {
+    // rate ≤ u32::MAX, so this fits in usize
+    ticks_to_frames(gap, time_base, rate)
+        .unwrap_or(0)
+        .min(u64::from(rate)) as usize
+}
+
 /// Frames of silence to stand in for a packet that failed to decode
 /// (REQ-034). `dur` is in `time_base` units and comes from the file, so the
 /// result is always capped.
@@ -101,14 +119,7 @@ fn fill_frames(
 ) -> usize {
     let frames = match last_frames {
         Some(n) => n as u64,
-        None => time_base
-            .and_then(|tb| {
-                let scaled = dur
-                    .checked_mul(u64::from(tb.numer.get()))?
-                    .checked_mul(u64::from(rate))?;
-                Some(scaled / u64::from(tb.denom.get()))
-            })
-            .unwrap_or(0),
+        None => ticks_to_frames(dur, time_base, rate).unwrap_or(0),
     };
     let cap = max_per_packet.map_or(u64::from(rate), |m| m.min(u64::from(rate)));
     // cap ≤ u32::MAX, so this fits in usize
@@ -152,6 +163,8 @@ pub(super) fn decode(name: &str, ext: &str, bytes: Vec<u8>) -> DecodeResult<Audi
     let mut scratch: Vec<f32> = Vec::new();
     let mut last_frames = None;
     let (mut packets, mut failed) = (0usize, 0usize);
+    // where the next packet should start, in time-base units
+    let mut next_pts: Option<i64> = None;
 
     loop {
         let packet = match reader.next_packet() {
@@ -165,6 +178,30 @@ pub(super) fn decode(name: &str, ext: &str, bytes: Vec<u8>) -> DecodeResult<Audi
             continue;
         }
         packets += 1;
+
+        // a packet the demuxer dropped leaves a gap: keep the timing (REQ-034)
+        let pts = packet.pts.get();
+        if let Some(gap) = next_pts
+            .and_then(|expected| pts.checked_sub(expected))
+            .filter(|&gap| gap > 0)
+        {
+            let frames = gap_frames(gap as u64, info.time_base, rate);
+            if frames > 0 {
+                packets += 1;
+                failed += 1;
+                push_silence(&mut out, frames.saturating_mul(channels))?;
+            }
+        }
+        // symphonia advances pts by the untrimmed duration
+        let span = packet
+            .dur
+            .get()
+            .saturating_add(packet.trim_start.get())
+            .saturating_add(packet.trim_end.get());
+        next_pts = i64::try_from(span)
+            .ok()
+            .and_then(|span| pts.checked_add(span));
+
         match decoder.decode(&packet) {
             Ok(buf) => {
                 if buf.spec().channels().count() != channels {
@@ -258,5 +295,15 @@ mod tests {
         assert_eq!(fill_frames(None, 10_000_000, tb(1, 1), 48000, None), 48000);
         assert_eq!(fill_frames(Some(1 << 30), 0, None, 48000, None), 48000);
         assert_eq!(fill_frames(Some(5000), 0, None, 48000, Some(1024)), 1024);
+    }
+
+    #[test]
+    fn gap_frames_is_bounded() {
+        assert_eq!(gap_frames(4608, tb(1, 44100), 44100), 4608);
+        // 1/90000 time base: 9000 ticks are 100 ms
+        assert_eq!(gap_frames(9000, tb(1, 90000), 48000), 4800);
+        assert_eq!(gap_frames(u64::MAX, tb(1, 44100), 44100), 0);
+        assert_eq!(gap_frames(4608, None, 44100), 0);
+        assert_eq!(gap_frames(10_000_000, tb(1, 44100), 44100), 44100);
     }
 }
