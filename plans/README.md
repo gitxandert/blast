@@ -5,16 +5,15 @@ cross-task contracts. **Who does what, and who approves what, is in
 [`ORG.md`](ORG.md).** To start or resume the project, see
 [`KICKOFF.md`](KICKOFF.md).
 
-Roles: the user; under the user, the architect and the PM as peers (the PM is
-the active session and relays for the architect); under the PM, planners (one
-per brief); under each planner, implementers (one per task). Planners don't write code. Implementers don't
-change their plan; if they need to, they stop and report to their planner.
+Roles (`ORG.md`): the user; under the user, the architect (the active
+session), who writes every plan and deploys builders; under the architect,
+builders (one per task), who implement an approved plan themselves. Builders
+don't change their plan; if they need to, they stop and report to the
+architect.
 
-**Planner deployment.** There are 6 planners, one per brief, all spawned at once
-by the PM in phase 1. While planning they only read code and write their own
-files under `plans/`, so they can't conflict. Each brief bundles a set of tasks
-with the downstream tasks that consume their interfaces, so dependent plans are
-written by the same planner, who later oversees those tasks' implementers.
+**Briefs.** Each brief bundles a set of tasks with the downstream tasks that
+consume their interfaces. They were written for the retired planners and are
+now the architect's planning input.
 
 | Brief | Tasks |
 |---|---|
@@ -51,7 +50,7 @@ scaffold step 0, so no task ever edits `Cargo.toml`.
 Measured on the dev machine: the full set builds clean in about 11 s in
 release, against 5.7 s today. Incremental builds don't change. These rules
 apply to dependencies:
-- **Any crate not on this list needs the user's approval.** A planner that
+- **Any crate not on this list needs the user's approval.** A plan that
   wants one says so under "Risks and open questions" with: what it saves, its
   clean build time, its transitive crate count, and whether it contains
   `unsafe`. Measure it in a scratch crate.
@@ -145,7 +144,7 @@ instead.
 it, or introduce something of the same weight (a new thread, a new queue, a
 change to the engine's ownership model, a new top-level module, replacing a
 subsystem), puts it under "Architecture changes" in the plan for the user to
-approve. Implementers never make such changes on their own.
+approve. Builders never make such changes on their own.
 
 ### Wave 1: file decoding and the command split (2 tasks)
 
@@ -190,8 +189,8 @@ After wave 3, the architect adds `#![forbid(unsafe_code)]` and removes
 
 ## 3. Approved architecture and cross-task contracts
 
-Planners build against these. If a contract turns out to be unworkable, the
-plan says so under "Contract issues", with a proposal. Planners don't quietly
+Plans and builders build against these. If a contract turns out to be unworkable, the
+plan says so under "Contract issues", with a proposal. Plans don't quietly
 diverge from a contract.
 
 ### 3.1 Samples (scaffold step 0, F1)
@@ -341,7 +340,7 @@ commands go through this API only.
 1. **f32 internal samples: yes.**
 2. **Shell syntax:** start from `blast/notes.txt` (`name { … | … }`, `&`,
    `-n/--name`, `all`) plus `let`, `for`, `if`, `fn` and `source`. The SH
-   planner proposes a concrete grammar for the user to approve before SH is
+   plan proposes a concrete grammar for the user to approve before SH is
    implemented.
 3. **macOS / Windows: deferred.** cpal and crossterm are cross-platform, so
    nothing new should be Linux-only without a reason. But nothing is planned or
@@ -352,7 +351,7 @@ commands go through this API only.
    `import` flags (`--fmt/--rate/--ch`) taking precedence.
 6. **Recording:** 32-bit float WAV, tapped before the output clamp, with an
    optional 16- or 24-bit dithered mode.
-7. **Subfolder track naming:** the LOAD planner proposes a scheme for the user
+7. **Subfolder track naming:** the LOAD plan proposes a scheme for the user
    to approve.
 8. **Dependencies:** the approved set in §1.1. Anything else needs approval.
 9. **Decoders:** symphonia, plus hand-written raw and AU. The niche formats in

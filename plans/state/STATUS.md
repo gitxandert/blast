@@ -1,4 +1,4 @@
-# Project status (PM-owned)
+# Project status (architect-owned)
 
 **Phase:** 3 (wave 2), gate-in pending: wave 1 merged into dev @ bde1a64 (2026-10-24). Wave 2 needs E1 (unwritten), LOAD and SH plans approved first.
 **Updated:** 2026-10-24
@@ -30,8 +30,8 @@ Phases: 0 not started · 1 planning · 2 wave 1 · 3 wave 2 · 4 wave 3 · 5 wav
 | EUC | PI | 4 | draft | none | |
 | FX | PI | 4 | draft | none | |
 
-Plan states: none → draft → in-review (architect) → awaiting-user → approved (→ revised).
-Implementation states: none → scaffolded → dispatched → in-review (planner) → ready → merged (integrate) → in-dev.
+Plan states: none → draft → awaiting-user → approved (→ revised).
+Implementation states: none → scaffolded → building (builder) → in-review (architect) → ready → merged (integrate) → in-dev.
 
 ## Waves
 
@@ -42,28 +42,22 @@ Implementation states: none → scaffolded → dispatched → in-review (planner
 | 3 | integrate/wave-3 | no | 0/7 | no |
 | 4 | integrate/wave-4 | no | 0/6 | no |
 
-**Org (user decision 2026-10-24):** two agents only, architect + PM (ORG.md top note). PM implements tasks one at a time; architect writes remaining plans, reviews and merges. Planner rows below are history.
-
-**User instruction (2026-10-24, earlier):** to save usage, run only the architect and planner PB for now; restart other planners one at a time later. PI was stopped mid-edit of VOXa/LFO/ENV and its journal: on respawn, it must check those edits are complete.
+**Org (user decision 2026-10-24, latest):** two roles, architect + builders (ORG.md). The architect is the active session (high effort), writes all plans, and deploys one builder per approved task (medium effort, worktree), which implements it itself. Earlier org notes and planner rows below are history.
 
 ## User queue (presented one at a time, top first)
 
-**Paused by user (2026-10-24) after wave 1 merged into dev.** On resume: wave 2 planning: architect writes E1; then reviews LOAD; user approves E1, LOAD, SH plans and their requests.
+**Paused by user (2026-10-24) after wave 1 merged into dev.** On resume: wave 2 planning: architect writes E1 and refreshes LOAD; user approves E1, LOAD, SH plans and their requests; then scaffold wave 2 and deploy builders.
 
 Wave 1 items REQ-024, 031, 032, 033, 034, 036, 042, 043, 044: all decided 2026-10-24 (approved as recommended; see decisions.md).
 
 Later (architect-reviewed, awaiting user): REQ-001, 002 (REC designs), 003, 004 (grammar), 005, 006; plan approvals for SH-grammar/SHa/SHb, RECa/b/c.
-Answered by PM: REQ-035 (from PB brief).
+Answered from the docs (former PM): REQ-035 (from PB brief).
 FYI for user: architect bumped alsa-sys 0.3.1→0.4.0 to resolve with cpal (README §1.1 clarification).
 
-## Agent roster (this session only; cleared on context reset)
+## Builder roster (this session only; cleared on context reset)
 
-| Agent | Role | Scope | Spawned | State |
+| Builder | Task | Branch | Spawned | State |
 |---|---|---|---|---|
-| architect | Architect | phase 1 reviews: C1, F1a/b, REC, SH + REQ-001..006, 024, 031..036 | 2026-10-24 (resume) | idle (wave 1 merged into dev); respawn from journal on resume |
-| planner-PA | Planner | PA-core: E1 plans, R1 plan, REQ-025..030 | 2026-10-24 (resume) | stopped (user: save usage); respawn later, one at a time |
-| planner-PB | Planner | PB-audio-files: REQ-031..036 first, then LOAD, TRK, REQ-037..041 | 2026-10-24 (resume) | done (F1a/b fixes applied, Status approved; F1a implementer prompt in its journal, NOT dispatched). Retired: user wants architect + PM only |
-| planner-PF | Planner | PF-shell-repl | n/a | not respawned (planning done; waits for decisions) |
-| planner-PH | Planner | PH-engine-commands: REQ-015..017, INS plan | 2026-10-24 (resume) | stopped (user: save usage); respawn later, one at a time |
-| planner-PI | Planner | PI-voice-dsp: REQ-018..023 | 2026-10-24 (resume) | stopped (user: save usage); respawn later, one at a time |
-| planner-PJ | Planner | PJ-recording | n/a | not respawned (planning done; waits for decisions) |
+| (none) | | | | |
+
+Retired agents (history): architect background agent, planners PA/PB/PF/PH/PI/PJ. Their journals are in `state/architect.md` and `state/planners/`.

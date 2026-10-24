@@ -1,6 +1,13 @@
 # Architect journal
 
 ## Current job
+**2026-10-24, organisation change (supersedes the notes below).** The
+architect is now the active session, not a background agent: it keeps the
+board, decisions and requests (the former PM's duties), writes all plans, and
+deploys builders (`roles/builder.md`) for user-approved plans, then reviews
+and merges their branches. Role: `roles/architect.md`. Next: wave 2 planning
+(write E1, refresh LOAD), then user approvals for E1, LOAD and SH.
+
 **2026-10-24, phase 0 → 1 kickoff** (spawned by the PM on the user's behalf).
 1. Scaffold step 0 (README §2) on new branch `integrate/wave-1` from `dev`,
    in worktree `/home/alexander-toth/rust_proj/blast-integrate`. Build and

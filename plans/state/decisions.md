@@ -1,4 +1,4 @@
-# User decisions (append-only, PM-owned)
+# User decisions (append-only, architect-owned)
 
 Each entry records the date, the decision, and its source (a request ID, or
 "pre-kickoff" for decisions made while the plans were being written).
@@ -56,3 +56,12 @@ Each entry records the date, the decision, and its source (a request ID, or
 ## Wave 1 gate (2026-10-24)
 
 - REQ-045: merge integrate/wave-1 @ a652f36 into dev. Approved.
+
+## Organisation change (2026-10-24, second)
+
+- Two agents only: the **architect** and the **builder** (the role the PM had).
+  The architect (high effort) is now the active session: it writes all plans
+  and, once the user approves a plan, deploys a builder for it. Each builder
+  (medium effort) implements its plan itself, in a worktree, and reports to
+  the architect, who reviews and merges. Waves stay as they are. Supersedes the
+  previous organisation change. (`ORG.md`; user via phone.)
