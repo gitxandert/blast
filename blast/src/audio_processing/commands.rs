@@ -136,7 +136,7 @@ pub struct StopArgs {
 }
 
 pub struct UnloadArgs {
-    pub idx: usize,
+    pub idx: Idx, // Voice or GroupVoice
 }
 
 pub struct VelocityArgs {
@@ -553,26 +553,24 @@ impl CmdProcessor {
     } 
 
     fn try_unload(&mut self, name: String) -> CmdResult<Command> {
-        // gets idx and removes VoiceRepr from self.engine_state.voices
-        let idx = match self.engine_state.voices.entry(name.clone()) {
-            Entry::Occupied(e) => {
-                let e_idx = e.get().idx;
-                e.remove();
-                e_idx
+        // accepts voice or group.voice; gets idx and removes
+        // the VoiceRepr from its owner (engine_state or a Group)
+        let name = name.trim().to_string();
+        let idx = self.find_voice_idx(name.clone())?;
+
+        let (voices, v_name) = match name.split_once('.') {
+            Some((group, voice)) => {
+                (&mut self.find_group(group.to_string())?.voices, voice)
             }
-            Entry::Vacant(_) => {
-                return Err(CmdErr::NoVoice { 
-                    name: name.to_owned(), 
-                    group: None 
-                });
-            }
+            None => (&mut self.engine_state.voices, name.as_str()),
         };
+        let removed = voices.remove(v_name).unwrap().idx; // found above
 
         // since all Voices after the removed Voice will be 
         // shifted to the left, decrease all VoiceReprs with
         // an idx greater than the removed Voice's
-        for (_, mut voice) in &mut self.engine_state.voices {
-            if voice.idx > idx {
+        for (_, voice) in voices.iter_mut() {
+            if voice.idx > removed {
                 voice.idx -= 1;
             }
         }
@@ -1020,6 +1018,12 @@ impl CmdProcessor {
 
                     let step_strs: Vec<&str> = s_arg.split(',').collect();
 
+                    // a repeated -s replaces the steps (and the chance/jit
+                    // values that were sized to them) rather than appending
+                    steps.clear();
+                    chance.clear();
+                    jit.clear();
+
                     for step in step_strs {
                         match step.parse::<f32>() {
                             Ok(val) => steps.push(val),
@@ -1187,18 +1191,21 @@ impl CmdProcessor {
                                             upper = idx1;
                                         }
                         
-                                        // only check against lower because who cares if upper is too high
-                                        if lower > *steps.get(steps.len() - 1).unwrap() {
-                                            return Err(CmdErr::Formatting {
-                                                err: "seq -c range applies to nothing".to_string()
-                                            });
-                                        }
-
+                                        // steps can be in any order, so check
+                                        // whether any step fell in the range
+                                        let mut found = false;
                                         for idx in {0..steps.len()} {
                                             let step = *steps.get(idx).unwrap();
                                             if step >= lower && step <= upper {
                                                 chance[idx] = chance_val;
+                                                found = true;
                                             }
+                                        }
+
+                                        if !found {
+                                            return Err(CmdErr::Formatting {
+                                                err: "seq -c range applies to nothing".to_string()
+                                            });
                                         }
                                     }
                                     _ => (),
@@ -1713,7 +1720,7 @@ mod tests {
         ok(&mut cp, "load b");
         ok(&mut cp, "load c");
         match ok(&mut cp, "unload a") {
-            Command::Unload(args) => assert_eq!(args.idx, 0),
+            Command::Unload(args) => assert_eq!(args.idx, Idx::Voice(0)),
             _ => panic!("not an Unload"),
         }
         assert!(cp.engine_state.voices.get("a").is_none());
@@ -2402,5 +2409,20 @@ mod seq_tests {
         assert_eq!(cp.find_voice("kick".to_string()).unwrap().proc_tempi.len(), 3);
 
         assert!(matches!(seq_err("seq kick -s 0 -n"), CmdErr::MissingArg { .. }));
+    }
+
+    #[test]
+    fn repeated_steps_flag_replaces() {
+        let args = seq_ok("seq kick -s 0,1,2 -c 50 -s 0,2");
+        assert_eq!(args.steps, vec![0.0, 2.0]);
+        assert_eq!(args.chance, vec![100.0, 100.0]);
+        assert_eq!(args.jit.len(), 8);
+    }
+
+    #[test]
+    fn chance_range_with_unsorted_steps() {
+        let args = seq_ok("seq kick -s 3,0 -c 2-5:40");
+        assert_eq!(args.chance, vec![40.0, 100.0]);
+        assert!(matches!(seq_err("seq kick -s 3,0 -c 4-5:40"), CmdErr::Formatting { .. }));
     }
 }

@@ -60,7 +60,10 @@ pub mod blast_time {
         pub unit: TempoUnit,
         pub interval: f32,
         pub active: bool,
-        pub current: u32,
+        pub current: u64,
+        // bumped on every reset, so anything tracking this
+        // TempoState's position can tell a restart from a wrap
+        pub epoch: u32,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq)]
@@ -93,6 +96,7 @@ pub mod blast_time {
                 interval: sample_rate::get() as f32,
                 active: false,
                 current: 0,
+                epoch: 0,
             }
         }
 
@@ -104,23 +108,32 @@ pub mod blast_time {
         }
 
         pub fn clone(&self) -> TempoState {
-            let mut clone = TempoState::new(None);
-            clone.init(self.mode.clone(), self.unit.clone(), self.interval);
+            // interval is already in samples, so copy it rather
+            // than running it through init() (which converts again)
+            let mut clone = TempoState::new(Some(self.mode));
+            clone.unit = self.unit;
+            clone.interval = self.interval;
             clone
         }
 
-        // store current as AtomicU32
         //
         // paused/stopped TempoStates don't advance
         pub fn update(&mut self, delta_in_samples: f64) {
             if !self.active { return; }
-            self.current += delta_in_samples as u32;
+            self.current += delta_in_samples as u64;
         }
 
-        // return current as f32
+        // return current in steps (of interval) as f32;
+        // divide in f64, since f32 can't count samples exactly
+        // past 2^24 (~6 minutes at 48k)
         pub fn current(&self) -> f32 {
-            let step_f = self.current as f32 / self.interval;
-            step_f
+            (self.current as f64 / self.interval as f64) as f32
+        }
+
+        // current wrapped into 0..period steps; wrap in f64 so
+        // precision doesn't degrade the longer the tempo runs
+        pub fn current_in(&self, period: f32) -> f32 {
+            ((self.current as f64 / self.interval as f64) % period as f64) as f32
         }
 
         pub fn start(&mut self) {
@@ -143,6 +156,7 @@ pub mod blast_time {
 
         pub fn reset(&mut self) {
             self.current = 0;
+            self.epoch = self.epoch.wrapping_add(1);
         }
 
         pub fn set_interval(&mut self, new_interval: f32) {
@@ -250,5 +264,42 @@ mod tests {
         ts.start();
         assert_eq!(ts.current, 0);
         assert!(ts.active);
+    }
+
+    #[test]
+    fn current_in_stays_exact_after_hours() {
+        let mut ts = tempo(TempoUnit::Bpm, 120.0); // 24000 samples per step
+        ts.start();
+        // ~3 hours at 48k (21600 steps, a multiple of the period),
+        // past where f32 can count single samples
+        ts.current = 24000 * 21600 + 12001;
+        assert!((ts.current_in(4.0) - 12001.0 / 24000.0).abs() < 1e-6);
+        // past where a u32 counter would have overflowed (~25h)
+        ts.current = u32::MAX as u64 + 1;
+        let want = ((u32::MAX as f64 + 1.0) / 24000.0 % 4.0) as f32;
+        assert!((ts.current_in(4.0) - want).abs() < 1e-6);
+    }
+
+    #[test]
+    fn reset_bumps_epoch() {
+        let mut ts = tempo(TempoUnit::Samples, 100.0);
+        let e = ts.epoch;
+        ts.start();
+        assert_eq!(ts.epoch, e + 1);
+        ts.stop();
+        assert_eq!(ts.epoch, e + 2);
+        ts.pause();
+        ts.resume();
+        ts.update(5.0);
+        assert_eq!(ts.epoch, e + 2);
+    }
+
+    #[test]
+    fn clone_keeps_interval_in_samples() {
+        let ts = tempo(TempoUnit::Bpm, 120.0);
+        let clone = ts.clone();
+        assert_eq!(clone.interval, 24000.0);
+        assert_eq!(clone.unit, TempoUnit::Bpm);
+        assert_eq!(clone.mode, TempoMode::Context);
     }
 }

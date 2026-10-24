@@ -72,6 +72,7 @@ pub struct SeqState {
     pub rng: X128P, // TODO: impl user-defined seed
     pub idx: usize, // index of the step after the last one fired
     pub last: Option<f32>, // position at the previous process()
+    pub epoch: u32, // tempo.epoch when last was taken
 }
 
 impl Seq {
@@ -106,7 +107,15 @@ impl Seq {
         if state.steps.is_empty() || state.period == 0 { return false; }
 
         let period = state.period as f32;
-        let current = tempo.current() % period;
+        let current = tempo.current_in(period);
+
+        // a shared tempo was restarted (e.g. by its Group or by
+        // start -t) since the last call; start over instead of
+        // reading the drop in position as a wrap
+        if tempo.epoch != state.epoch {
+            state.epoch = tempo.epoch;
+            state.last = None;
+        }
 
         // steps fire when the position crosses them, since
         // step * interval is rarely a whole number of samples;
@@ -332,5 +341,25 @@ mod tests {
         c.apply(Command::Start(StartArgs { idx: Idx::Voice(0) }));
         let out = render(&mut c, 1, 1500);
         assert_eq!(triggers(&out), vec![0, 1000]);
+    }
+
+    #[test]
+    fn seq_ignores_restart_of_shared_tempo() {
+        let mut c = setup(&[
+            "tc clk s:100",
+            "load kick",
+            "seq kick -t c:clk -p 4 -s 1,3",
+            "start -t clk",
+            "start -v kick",
+        ]);
+        render(&mut c, 1, 250); // fires step 1, stops at 2.5 steps
+
+        // restarting the context without the seq knowing would look
+        // like a wrap and fire step 3 straight away
+        c.apply(Command::Start(StartArgs { idx: Idx::Tempo(0) }));
+        let out = render(&mut c, 1, 150);
+        let fired = triggers(&out);
+        assert!(!fired.is_empty());
+        assert!(fired.iter().all(|f| *f > 50), "{:?}", fired);
     }
 }

@@ -226,7 +226,11 @@ impl Conductor {
     }
 
     fn unload(&mut self, args: UnloadArgs) {
-        self.voices.remove(args.idx);
+        match args.idx {
+            Idx::Voice(v) => { self.voices.remove(v); }
+            Idx::GroupVoice(g, v) => { self.groups[g].voices.remove(v); }
+            _ => (), // will only be Voice or GroupVoice
+        }
     }
 
     fn velocity(&mut self, args: VelocityArgs) {
@@ -299,6 +303,7 @@ impl Conductor {
             rng: args.rng,
             idx: 0,
             last: None,
+            epoch: tempo.borrow().epoch,
         };
         
         match args.idx {
@@ -319,6 +324,9 @@ impl Conductor {
                 let voice: &mut Voice = self.groups[g].voices.get_mut(v).unwrap();
                 voice.processes.push(Process::Seq(Seq { state }));
                 if args.tempo.mode == TempoMode::Process {
+                    if voice.state.active {
+                        tempo.borrow_mut().start();
+                    }
                     voice.proc_tempi.push(tempo);
                 }
             }
@@ -416,7 +424,9 @@ impl Voice {
         let voice_state = VoiceState {
             active: false,
             position: 0.0,
-            end: af.samples.len() / af.num_channels as usize - 1,
+            // an empty track has no frames; load_assets skips those,
+            // but don't underflow if one gets through
+            end: (af.samples.len() / (af.num_channels as usize).max(1)).saturating_sub(1),
             velocity: 1.0,
             gain: 1.0,
             tempo: tempo_state
@@ -482,8 +492,9 @@ impl Voice {
             p.reset();
         }
 
+        // same ownership rule as start()
         let mut ts = state.tempo.borrow_mut();
-        if ts.mode == TempoMode::Voice {
+        if ts.mode == TempoMode::Voice || ts.mode == TempoMode::TBD {
             ts.stop();
         }
 
@@ -533,7 +544,7 @@ impl Voice {
         // plays frames 0..=end in either direction; check the f32
         // position before casting, since a negative position
         // would saturate to 0 as usize
-        if !state.in_bounds() {
+        if !state.in_bounds() || self.samples.len() < self.channels {
             return;
         }
         let idx = state.position as usize;
@@ -664,8 +675,10 @@ impl Group {
     fn stop(&mut self) {
         self.state.active = false;
 
-        for mut voice in &mut self.voices {
-            voice.state.active = false;
+        // reset positions, Processes and own TempoStates too,
+        // so the next start begins from the top
+        for voice in &mut self.voices {
+            voice.stop();
         }
                 
         for p in &mut self.processes {
@@ -1338,5 +1351,51 @@ mod group_tests {
         assert_eq!(c.groups.len(), 2);
         assert!(Rc::ptr_eq(&c.groups[1].state.tempo, &c.tempo_cons[1]));
         assert_eq!(id(&c.groups[1].voices[0]), 2);
+    }
+
+    // leftovers
+
+    #[test]
+    fn empty_track_voice_doesnt_panic() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![AudioFile::new("e", "wav", 48000, 1, 16, vec![])]);
+        run(&mut cp, &mut c, "load e");
+        run(&mut cp, &mut c, "start -v e");
+        assert!(render(&mut c, 1, 8).iter().all(|s| *s == 0));
+    }
+
+    #[test]
+    fn group_stop_resets_voices() {
+        let (mut cp, mut c) = grouped();
+        run(&mut cp, &mut c, "start -g g");
+        render(&mut c, 1, 5);
+        assert_eq!(c.groups[0].voices[0].state.position, 5.0);
+
+        run(&mut cp, &mut c, "stop -g g");
+        for v in &c.groups[0].voices {
+            assert!(!v.state.active);
+            assert_eq!(v.state.position, 0.0);
+        }
+        // b's own tempo is stopped too
+        let b = c.groups[0].voices[1].state.tempo.borrow();
+        assert!(!b.active);
+        assert_eq!(b.current, 0);
+    }
+
+    #[test]
+    fn unload_group_voice() {
+        let (mut cp, mut c) = grouped();
+        run(&mut cp, &mut c, "unload g.a");
+        assert_eq!(c.groups[0].voices.len(), 1);
+        assert_eq!(c.groups[0].voices[0].samples[0], 2);
+        assert_eq!(c.voices.len(), 1);
+
+        // b moved to 0 in the mirror and the engine
+        run(&mut cp, &mut c, "velocity g.b 2");
+        assert_eq!(c.groups[0].voices[0].state.velocity, 2.0);
+
+        assert!(cp.parse("unload g.a".to_string()).is_err());
+        run(&mut cp, &mut c, "unload c");
+        assert!(c.voices.is_empty());
     }
 }
