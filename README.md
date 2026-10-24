@@ -30,6 +30,9 @@ One of the goals of this project is to realize as many features as possible with
 - symphonia
   - decodes WAV, AIFF/AIFC, FLAC, MP1/2/3, AAC (MP4/ADTS), ALAC and ADPCM through symphonia
   - fills corrupt packets with silence, so timing holds
+- raw, au, pcm
+  - headerless PCM (spec from the file name, e.g. `kick.s16le.48000.2.raw`) and Sun `.au`/`.snd`
+  - shared sample converters, including G.711 A-law and µ-law
 - riff_fixup
   - repairs WAV/AIFF quirks symphonia rejects (wrong sizes, `data` before `fmt `, `fact`/COMM frame counts)
 - decode_helpers
