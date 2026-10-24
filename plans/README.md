@@ -40,7 +40,7 @@ scaffold step 0, so no task ever edits `Cargo.toml`.
 
 | Crate | Version | Features | Used for |
 |---|---|---|---|
-| `symphonia` | 0.6.1 | `default-features = false`, `["wav","aiff","pcm","adpcm","flac","mpa","aac","alac","isomp4"]` | every decoder (F1) |
+| `symphonia` | 0.6.1 | `default-features = false`, `["wav","aiff","pcm","adpcm","flac","mpa","aac","alac","isomp4","id3v2"]` | every decoder (F1); `id3v2` reads large MP3 tags (REQ-032) |
 | `rubato` | 5.0.1 | `default-features = false` | resampling (LOAD) |
 | `cpal` | 0.18.2 | default (no features) | audio output (R1) |
 | `crossterm` | 0.29.0 | `default-features = false`, `["events"]` | raw mode, key events (R1) |
@@ -213,15 +213,19 @@ pub struct AudioFile {
 `file_parsing/` becomes a thin adapter:
 - `symphonia.rs`: probes and decodes everything symphonia supports (WAV,
   AIFF/AIFC, FLAC, MP1/2/3, AAC-LC in MP4/M4A or ADTS, ALAC, MS and IMA
-  ADPCM, A-law, µ-law) into `AudioFile`. Gapless trimming is on (encoder delay
-  and padding). Symphonia's errors map onto `DecodeError`.
+  ADPCM, A-law, µ-law) into `AudioFile`. Gapless trimming is on: it's exact
+  for MP3 (LAME/Xing). AAC in MP4 is trimmed at the end only (to the
+  track's frame count), and ADTS isn't trimmed at all, so use FLAC/WAV for
+  sample-accurate loops (REQ-033). Symphonia's errors map onto `DecodeError`.
 - `raw.rs`: headerless PCM. Parameters come from the filename
   (`name.s16le.48000.2.raw`), and `decode_with(name, bytes, RawSpec)` lets
   flags override them.
 - `au.rs`: Sun/NeXT `.au`/`.snd`. Hand-written, since symphonia lacks it.
 - `mod.rs`: `pub fn decode_file(path: &Path) -> DecodeResult<AudioFile>`
   dispatches to `raw`/`au` by magic number or extension, and to symphonia
-  otherwise. Tracks are named by file stem.
+  for the other supported extensions (`is_supported_extension`). Any other
+  extension is `UnsupportedFormat` without being read (REQ-036). Tracks are
+  named by file stem.
 - The old `wav.rs`, `aiff.rs`, `mpeg.rs` and `pcm_to_*` helpers are deleted.
   Before deleting them, port their edge-case tests into adapter tests that
   feed the same synthetic bytes through symphonia.

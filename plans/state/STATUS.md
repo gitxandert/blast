@@ -37,7 +37,7 @@ Implementation states: none → scaffolded → dispatched → in-review (planner
 
 | Wave | Branch | Scaffolded | Tasks merged | Merged into dev |
 |---|---|---|---|---|
-| 1 | integrate/wave-1 | step 0 done (2f97859); C1/F1 registry stubs pending plan approval | 0/2 | no |
+| 1 | integrate/wave-1 | done (a224767: step 0 + id3v2; no other stubs needed) | 0/3 (C1, F1a, F1b) | no |
 | 2 | integrate/wave-2 | no | 0/3 | no |
 | 3 | integrate/wave-3 | no | 0/7 | no |
 | 4 | integrate/wave-4 | no | 0/6 | no |
@@ -56,9 +56,9 @@ FYI for user: architect bumped alsa-sys 0.3.1→0.4.0 to resolve with cpal (READ
 
 | Agent | Role | Scope | Spawned | State |
 |---|---|---|---|---|
-| architect | Architect | phase 1 reviews: C1, F1a/b, REC, SH + REQ-001..006, 024, 031..036 | 2026-10-24 (resume) | done; not yet reviewed: LOAD, TRK, REPL, PH/PI plans, REQ-007..010, 037..041 |
+| architect | Architect | phase 1 reviews: C1, F1a/b, REC, SH + REQ-001..006, 024, 031..036 | 2026-10-24 (resume) | idle; next: merge C1/F1a/F1b when reports say ready |
 | planner-PA | Planner | PA-core: E1 plans, R1 plan, REQ-025..030 | 2026-10-24 (resume) | stopped (user: save usage); respawn later, one at a time |
-| planner-PB | Planner | PB-audio-files: REQ-031..036 first, then LOAD, TRK, REQ-037..041 | 2026-10-24 (resume) | done (F1a/b, LOAD, TRK; REQ-031..041 all written, open) |
+| planner-PB | Planner | PB-audio-files: REQ-031..036 first, then LOAD, TRK, REQ-037..041 | 2026-10-24 (resume) | resumed: apply F1a/b fixes, prep F1a dispatch (hold until scaffold) |
 | planner-PF | Planner | PF-shell-repl | n/a | not respawned (planning done; waits for decisions) |
 | planner-PH | Planner | PH-engine-commands: REQ-015..017, INS plan | 2026-10-24 (resume) | stopped (user: save usage); respawn later, one at a time |
 | planner-PI | Planner | PI-voice-dsp: REQ-018..023 | 2026-10-24 (resume) | stopped (user: save usage); respawn later, one at a time |

@@ -19,6 +19,13 @@
    below). Next: wave-1 scaffolding (`id3v2`, if REQ-032 is approved) once
    C1/F1a/F1b are user-approved; README/brief edits for each approved
    REQ-001/002/005/006/033/036.
+4. **2026-10-24, phase 2 (wave 1) started.** The user approved C1, F1a and F1b
+   (with my fixes: REQ-042/043/044), and REQ-024/031/032/033/034/036 as
+   recommended (decisions.md, dev ffa4de7). Done: README §1.1 symphonia row
+   (`id3v2`) and the §3.2 wording for REQ-033/036, left uncommitted for the PM
+   snapshot; wave-1 scaffold `a224767` (below). Next: integrate C1/F1a/F1b
+   branches when their planner reports say `ready` (order: F1a, F1b, C1;
+   F1b branches from F1a's tip).
 Not to do: merge into `dev`, push, edit plans (list fixes here instead).
 
 **Request status convention used here.** A request that I've reviewed and
@@ -277,6 +284,14 @@ Results: `cargo build` 0 warnings; `cargo test` 179 passed (also with the real
 clean. `cargo clippy --all-targets`: about 85 pre-existing warnings, none in
 new code (commands.rs ~38, mpeg.rs ~18, engine.rs ~9, the rest in
 blast_time/runtime/aiff/wav/decode_helpers/line_editor/blast_rand).
+
+### Wave 1 registry scaffold (2026-10-24)
+`a224767 build: enable symphonia's id3v2 feature` on `integrate/wave-1`
+(parent 2f97859). REQ-032: `"id3v2"` added to symphonia's features in
+`blast/Cargo.toml`. `Cargo.lock` is unchanged. C1 and F1 have no other
+registry entries (C1's call-site edits are its own commit, per REQ-024).
+Results: `cargo build` 0 warnings, `cargo test` 179 passed, `cargo fmt
+--check` clean.
 
 ## Integration log
 (one section per wave: merge order, results, issues)
