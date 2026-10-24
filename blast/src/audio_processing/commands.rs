@@ -50,6 +50,16 @@ impl CmdQueue {
         Ok(())
     }
 
+    // only meaningful on the producer side: the consumer can only
+    // make room, so a queue that isn't full stays that way until
+    // the producer pushes
+    pub fn is_full(&self) -> bool {
+        let head = self.head.load(Ordering::Relaxed);
+        let tail = self.tail.load(Ordering::Acquire);
+
+        (head + 1) % self.cap == tail
+    }
+
     pub fn try_pop(&self) -> Option<Command> {
         let tail = self.tail.load(Ordering::Relaxed);
         let head = self.head.load(Ordering::Acquire);
@@ -360,6 +370,19 @@ impl CmdProcessor {
         }
     }
 
+    // parse cmd and push it to the engine;
+    // parse() updates the mirror, so make sure the push can't fail
+    // afterwards (the command thread is the only producer, so a
+    // queue with room before parse still has room after)
+    pub fn submit(&mut self, cmd: String, queue: &CmdQueue) -> Result<(), String> {
+        if queue.is_full() {
+            return Err(String::from("Command queue full"));
+        }
+
+        let valid = self.parse(cmd).map_err(|error| error.to_string())?;
+        queue.try_push(valid)
+    }
+
     // CmdResults (returned directly to command thread)
     //
     fn try_load(&mut self, args: String) -> CmdResult<Command> {
@@ -600,12 +623,10 @@ impl CmdProcessor {
 
         let mut tempo = TempoRepr::new(0);
         tempo.init(TempoMode::Group, TempoUnit::Bpm, 240.0);
-        // kept in command-line (Group) order, so that flags and
-        // Process ids below line up with v_ids
-        let mut voices = Vec::<(String, VoiceRepr)>::new();
-        // save Voice indices as Voices are collected,
-        // since these indices will change when added to voices
-        let mut v_ids = Vec::<usize>::new();
+        // names of the Voices to group, in command-line (Group) order;
+        // nothing in engine_state changes until all args are valid,
+        // so a failed command leaves the mirror untouched
+        let mut v_names = Vec::<String>::new();
 
         while let Some(arg) = args.next() {
             match arg {
@@ -670,39 +691,20 @@ impl CmdProcessor {
                 "-v" | "--voices" => {
                     match args.next() {
                         Some(v) => {
-                            let names: Vec<_> = v.split(',').collect();
-
-                            // need to collect all indices of the Voices that
-                            // are being removed; then sort high to low
-                            // and decrement all other indices -ge
-                            for name in names {
+                            for name in v.split(',') {
                                 let name = name.to_string();
-                                match self.engine_state.voices.remove(&name) {
-                                    Some(mut voice) => {
-                                        v_ids.push(voice.idx);
-                                        voice.idx = voices.len(); // assign new index
-                                                                  // in Group's Vec
-                                        voices.push((name, voice));
-                                    }
-                                    None => return Err(CmdErr::NoVoice { 
+                                if !self.engine_state.voices.contains_key(&name) {
+                                    return Err(CmdErr::NoVoice { 
                                         name: name, 
                                         group: None 
-                                    }),
+                                    });
                                 }
-                            }
-
-                            // sort removed voices in reverse
-                            // so that the remaining voice.idx
-                            // are decremented correctly
-                            let mut sorted = v_ids.clone();
-                            sorted.sort_by(|a, b| b.cmp(a));
-
-                            for removed_id in sorted {
-                                for (_, v) in &mut self.engine_state.voices {
-                                    if v.idx > removed_id {
-                                        v.idx -= 1;
-                                    }
+                                if v_names.contains(&name) {
+                                    return Err(CmdErr::Formatting { 
+                                        err: format!("Voice '{}' listed more than once", name) 
+                                    });
                                 }
+                                v_names.push(name);
                             }
                         }
                         None => return Err(CmdErr::MissingArg { 
@@ -718,6 +720,37 @@ impl CmdProcessor {
             }
         }
        
+        // all args are valid; move the Voices out of the top level
+        //
+        // kept in command-line (Group) order, so that flags and
+        // Process ids below line up with v_ids
+        let mut voices = Vec::<(String, VoiceRepr)>::new();
+        // save Voice indices as Voices are collected,
+        // since these indices will change when added to voices
+        let mut v_ids = Vec::<usize>::new();
+
+        for name in v_names {
+            let mut voice = self.engine_state.voices.remove(&name).unwrap();
+            v_ids.push(voice.idx);
+            voice.idx = voices.len(); // assign new index
+                                      // in Group's Vec
+            voices.push((name, voice));
+        }
+
+        // sort removed voices in reverse
+        // so that the remaining voice.idx
+        // are decremented correctly
+        let mut sorted = v_ids.clone();
+        sorted.sort_by(|a, b| b.cmp(a));
+
+        for removed_id in sorted {
+            for (_, v) in &mut self.engine_state.voices {
+                if v.idx > removed_id {
+                    v.idx -= 1;
+                }
+            }
+        }
+
         // assign flags to each Voice depending on whether its
         // TempoState will refer to the Group's
         let mut v_flags: Vec<bool> = Vec::new();
@@ -1785,5 +1818,96 @@ mod tests {
         assert_eq!(t.mode, TempoMode::Group);
         assert!(!t.owned);
         assert_eq!(t.idx, 0);
+    }
+
+    // failed commands don't touch the mirror (B16)
+
+    fn loaded(names: &[&str]) -> CmdProcessor {
+        let mut cp = processor(names);
+        for n in names {
+            ok(&mut cp, &format!("load {}", n));
+        }
+        cp
+    }
+
+    fn assert_untouched(cp: &CmdProcessor, names: &[&str]) {
+        assert!(cp.engine_state.groups.is_empty());
+        assert_eq!(cp.engine_state.voices.len(), names.len());
+        for (i, n) in names.iter().enumerate() {
+            assert_eq!(v_idx(cp, n), i, "{}", n);
+        }
+    }
+
+    #[test]
+    fn failed_group_leaves_mirror_unchanged() {
+        let names = ["a", "b", "c"];
+        for cmd in [
+            "group g -v a,nope",
+            "group g -v nope,b",
+            "group g -v a -t x:1",
+            "group g -v a -t c:nope",
+            "group g -v c -v nope",
+            "group g -v a,a",
+            "group g -v a -v a",
+            "group g -v b -x",
+            "group g -v",
+        ] {
+            let mut cp = loaded(&names);
+            err(&mut cp, cmd);
+            assert_untouched(&cp, &names);
+        }
+    }
+
+    #[test]
+    fn group_unknown_voice_is_no_voice() {
+        let mut cp = loaded(&["a"]);
+        match err(&mut cp, "group g -v a,nope") {
+            CmdErr::NoVoice { name, group } => {
+                assert_eq!(name, "nope");
+                assert_eq!(group, None);
+            }
+            other => panic!("wrong error {:?}", other),
+        }
+    }
+
+    #[test]
+    fn group_with_several_voice_flags() {
+        let mut cp = loaded(&["a", "b", "c", "d"]);
+        let args = group_args(ok(&mut cp, "group g -v c -v a"));
+        let ids: Vec<usize> = args.vs_fs_ps.iter().map(|(i, _, _)| *i).collect();
+        assert_eq!(ids, vec![2, 0]);
+        assert_eq!(gv_idx(&cp, "g", "c"), 0);
+        assert_eq!(gv_idx(&cp, "g", "a"), 1);
+        assert_eq!(v_idx(&cp, "b"), 0);
+        assert_eq!(v_idx(&cp, "d"), 1);
+    }
+
+    #[test]
+    fn full_queue_leaves_mirror_unchanged() {
+        let mut cp = processor(&["a"]);
+        let queue = CmdQueue::new(2); // holds one Command
+        assert!(!queue.is_full());
+
+        cp.submit("tc clk b:120".to_string(), &queue).unwrap();
+        assert!(queue.is_full());
+
+        assert!(cp.submit("load a".to_string(), &queue).is_err());
+        assert!(cp.engine_state.voices.is_empty());
+
+        assert!(queue.try_pop().is_some());
+        assert!(!queue.is_full());
+        cp.submit("load a".to_string(), &queue).unwrap();
+        assert_eq!(v_idx(&cp, "a"), 0);
+        assert!(matches!(queue.try_pop(), Some(Command::Load(_))));
+        assert!(queue.try_pop().is_none());
+    }
+
+    #[test]
+    fn submit_reports_parse_errors() {
+        let mut cp = processor(&["a"]);
+        let queue = CmdQueue::new(4);
+        let error = cp.submit("load nope".to_string(), &queue).unwrap_err();
+        assert!(error.contains("nope"));
+        assert!(queue.try_pop().is_none());
     }
 }

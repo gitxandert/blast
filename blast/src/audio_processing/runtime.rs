@@ -152,16 +152,10 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
                         cmd_history.push(cmd.clone());
                         cmd_idx = cmd_history.len();
 
-                        match cmd_processor.parse(cmd) {
-                            Ok(valid) => {
-                                match queue.try_push(valid) {
-                                    Ok(()) => (),
-                                    Err(error) => {
-                                        buf.clear();
-                                        println!("\nErr: {error}");
-                                    }
-                                }
-                            }
+                        // checks the queue before parsing, so a full
+                        // queue can't desync the mirror from the engine
+                        match cmd_processor.submit(cmd, &queue) {
+                            Ok(()) => (),
                             Err(error) => {
                                 buf.clear();
                                 println!("\nErr: {error}");

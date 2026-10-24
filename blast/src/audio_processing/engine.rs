@@ -858,4 +858,25 @@ mod tests {
         let g = &c.groups[0];
         assert!(Rc::ptr_eq(&seq_tempo(&g.voices[0].processes[0]), &g.state.tempo));
     }
+
+    // failed commands don't touch the mirror (B16)
+
+    #[test]
+    fn failed_group_keeps_mirror_and_engine_in_sync() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("a", 1, 16), track("b", 2, 16)]);
+        run(&mut cp, &mut c, "load a");
+        run(&mut cp, &mut c, "load b");
+        assert!(cp.parse("group g -v a,nope".to_string()).is_err());
+
+        // b is still voices[1] on both sides
+        run(&mut cp, &mut c, "velocity b 2");
+        assert_eq!(c.voices.len(), 2);
+        assert_eq!(c.voices[1].state.velocity, 2.0);
+        assert_eq!(c.voices[0].state.velocity, 1.0);
+
+        run(&mut cp, &mut c, "group g -v a");
+        assert_eq!(id(&c.groups[0].voices[0]), 1);
+        assert_eq!(id(&c.voices[0]), 2);
+    }
 }
