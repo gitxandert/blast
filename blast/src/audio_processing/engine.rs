@@ -67,21 +67,25 @@ impl Conductor {
                     let byte_offset = bit_offset / 8;
 
                     let sample_ptr = base.offset(byte_offset) as *mut i16;
-            
-                    unsafe {
-                        *sample_ptr = 0;
-                    }
+
+                    // mix in f32 and clip once on write, so summing
+                    // Voices can't overflow i16
+                    let mut mix = 0f32;
 
                     for voice in &mut self.voices {
                         if voice.state.active {
-                            voice.process(sample_ptr, f, ch);
+                            voice.process(&mut mix, f, ch);
                         }
                     }
 
                     for group in &mut self.groups {
                         if group.state.active {
-                            group.process(sample_ptr, f, ch);
+                            group.process(&mut mix, f, ch);
                         }
+                    }
+
+                    unsafe {
+                        *sample_ptr = mix.clamp(i16::MIN as f32, i16::MAX as f32) as i16;
                     }
                 }
 
@@ -456,7 +460,7 @@ impl Voice {
 
     // mix one channel of the current frame into acc;
     // called once per channel
-    fn process(&mut self, acc: *mut i16, frame: u64, mut ch: usize) {
+    fn process(&mut self, acc: &mut f32, frame: u64, mut ch: usize) {
         if !self.state.active { return; }
 
         let state = &mut self.state;
@@ -499,9 +503,7 @@ impl Voice {
             sample = s0;
         }
 
-        unsafe {
-            *acc += (sample * state.gain) as i16;
-        }
+        *acc += sample * state.gain;
     }
 
     // move position; called once per frame, after process()
@@ -613,7 +615,7 @@ impl Group {
     }
 
     // mix one channel of the current frame into acc
-    fn process(&mut self, acc: *mut i16, frame: u64, mut ch: usize) {
+    fn process(&mut self, acc: &mut f32, frame: u64, mut ch: usize) {
         if !self.state.active { return; }
 
         for v in &mut self.voices {
@@ -798,6 +800,36 @@ mod tests {
             render_at_velocity(-0.5, 11),
             vec![50, 45, 40, 35, 30, 25, 20, 15, 10, 0, 0]
         );
+    }
+
+    // two started mono Voices of constant `a` and `b` on 1 output channel
+    fn render_two_voices(a: i16, b: i16) -> Vec<i16> {
+        sample_rate::set(48000);
+        let mut c = conductor(1, vec![track("a", 1, 100, a), track("b", 1, 100, b)]);
+        // track order comes from a HashMap, so look the indices up
+        let ia = c.tracks.iter().position(|t| t.file_name == "a").unwrap();
+        let ib = c.tracks.iter().position(|t| t.file_name == "b").unwrap();
+        c.apply(Command::Load(LoadArgs { track_idx: ia, tempo_repr: tempo(TempoMode::Voice, 100.0) }));
+        c.apply(Command::Load(LoadArgs { track_idx: ib, tempo_repr: tempo(TempoMode::Voice, 100.0) }));
+        start_voice(&mut c, 0);
+        start_voice(&mut c, 1);
+        render(&mut c, 1, 10)
+    }
+
+    #[test]
+    fn mix_clips_at_i16_max() {
+        assert!(render_two_voices(30000, 30000).iter().all(|&s| s == i16::MAX));
+    }
+
+    #[test]
+    fn mix_clips_at_i16_min() {
+        assert!(render_two_voices(-30000, -30000).iter().all(|&s| s == i16::MIN));
+    }
+
+    #[test]
+    fn mix_sums_small_values_exactly() {
+        assert!(render_two_voices(1000, 2000).iter().all(|&s| s == 3000));
+        assert!(render_two_voices(1000, -3000).iter().all(|&s| s == -2000));
     }
 
     #[test]
