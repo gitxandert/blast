@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{self, Read, SeekFrom};
 use std::ops::{Shl, BitOr, AddAssign};
-use super::decode_helpers::{AudioFile, DecodeError, DecodeResult};
+use super::decode_helpers::{AudioFile, DecodeError, DecodeResult, pcm_to_i16, float_to_i16};
 
 // format codes
 #[repr(u16)]
@@ -109,6 +109,10 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
 
     let bits_per_sample: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
 
+    // extensible files carry the real format in the SubFormat GUID
+    let mut sample_fmt: FormatCode = fmt_tag;
+    let mut file_bits: u32 = bits_per_sample;
+
     // if !WaveFormatPcm (i.e. is extensible)
     if fmt_size >= 18 {
         // extension is either 0 or 22
@@ -123,6 +127,15 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
 
             // rest of the SubFormat GUID is skipped below
             // TODO: compare against audio media subtype
+            if fmt_tag == FormatCode::WaveFormatExtensible {
+                sample_fmt = match FormatCode::from_u16(old_fmt as u16) {
+                    Some(code) => code,
+                    None => return Err(DecodeError::UnsupportedFormat(format!("Unrecognized SubFormat {old_fmt:#06x}"))),
+                };
+                if valid_bits > 0 {
+                    file_bits = valid_bits;
+                }
+            }
         }
     }
 
@@ -139,21 +152,19 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     print_id(&mut reader, &mut start, &mut end)?;
     let data_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
    
-    let mut samples: Vec<i16> = Vec::new();
-    
     end += data_size as usize;
-    for i in (start..end).step_by(2) {
-        let s1 = match reader.get(i) {
-            Some(val) => *val,
-            None => return Err(DecodeError::UnexpectedEof),
-        };
-        let s2 = match reader.get(i + 1) {
-            Some(val) => *val,
-            None => return Err(DecodeError::UnexpectedEof),
-        };
- 
-        samples.push(i16::from_le_bytes([s1, s2]));
-    }
+    let data: &[u8] = match reader.get(start..end) {
+        Some(val) => val,
+        None => return Err(DecodeError::UnexpectedEof),
+    };
+
+    // container size (bits_per_sample) decides how many bytes each sample takes
+    let samples: Vec<i16> = match sample_fmt {
+        // 8-bit WAV is unsigned
+        FormatCode::WaveFormatPcm => pcm_to_i16(data, bits_per_sample, false, true)?,
+        FormatCode::WaveFormatIeeeFloat => float_to_i16(data, bits_per_sample, false)?,
+        other => return Err(DecodeError::UnsupportedFormat(format!("{:?}", other))),
+    };
 
     let file_name: &str = match path.rsplit_once(|b: char| b == '.') {
         Some((before, after)) if !before.is_empty() && !after.is_empty() => {
@@ -165,7 +176,7 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
         _ => return Err(DecodeError::InvalidData("File has no name".to_string())),
     };
 
-    Ok(AudioFile::new(file_name, "wav", sample_rate, num_channels, bits_per_sample, samples))
+    Ok(AudioFile::new(file_name, "wav", sample_rate, num_channels, file_bits, samples))
 }
 
 #[cfg(test)]
@@ -268,6 +279,65 @@ mod tests {
         let cut = &bytes[..bytes.len() - 3];
         assert!(matches!(parse_temp("trunc", cut), Err(DecodeError::UnexpectedEof)));
         assert!(matches!(parse_temp("trunc_hdr", &bytes[..20]), Err(DecodeError::UnexpectedEof)));
+    }
+
+    // full-scale positive, full-scale negative, zero
+    const EXPECTED: [i16; 3] = [i16::MAX, i16::MIN, 0];
+
+    fn depth_file(name: &str, fmt: Vec<u8>, data: &[u8]) -> AudioFile {
+        parse_temp(name, &riff(&[chunk(b"fmt ", &fmt), chunk(b"data", data)])).unwrap()
+    }
+
+    #[test]
+    fn converts_8_bit_unsigned() {
+        let file = depth_file("u8", fmt_body(1, 1, 48000, 8), &[0xFF, 0x00, 0x80]);
+        assert_eq!(file.samples, vec![32512, i16::MIN, 0]);
+        assert_eq!(file.bits_per_sample, 8);
+    }
+
+    #[test]
+    fn converts_24_bit() {
+        let file = depth_file("s24", fmt_body(1, 1, 48000, 24), &[0xFF, 0xFF, 0x7F, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00]);
+        assert_eq!(file.samples, EXPECTED.to_vec());
+        assert_eq!(file.bits_per_sample, 24);
+    }
+
+    #[test]
+    fn converts_32_bit_int() {
+        let data: Vec<u8> = [i32::MAX, i32::MIN, 0].iter().flat_map(|s| s.to_le_bytes()).collect();
+        let file = depth_file("s32", fmt_body(1, 1, 48000, 32), &data);
+        assert_eq!(file.samples, EXPECTED.to_vec());
+    }
+
+    #[test]
+    fn converts_32_bit_float() {
+        let data: Vec<u8> = [1.0f32, -1.0, 0.0].iter().flat_map(|s| s.to_le_bytes()).collect();
+        let file = depth_file("f32", fmt_body(3, 1, 48000, 32), &data);
+        assert_eq!(file.samples, EXPECTED.to_vec());
+    }
+
+    #[test]
+    fn extensible_uses_sub_format_and_valid_bits() {
+        let data = [0xF0, 0xFF, 0x7F, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00];
+        let file = depth_file("ext24", fmt_ext_body(1, 1, 48000, 24, 20), &data);
+        assert_eq!(file.samples, EXPECTED.to_vec());
+        assert_eq!(file.bits_per_sample, 20);
+
+        let data: Vec<u8> = [1.0f32, -1.0, 0.0].iter().flat_map(|s| s.to_le_bytes()).collect();
+        let file = depth_file("extf32", fmt_ext_body(3, 2, 48000, 32, 32), &data);
+        assert_eq!(file.samples, EXPECTED.to_vec());
+    }
+
+    #[test]
+    fn unsupported_formats_are_errors() {
+        let bytes = riff(&[chunk(b"fmt ", &fmt_body(6, 1, 8000, 8)), chunk(b"data", &[0xD5])]);
+        assert!(matches!(parse_temp("alaw", &bytes), Err(DecodeError::UnsupportedFormat(_))));
+        let bytes = riff(&[chunk(b"fmt ", &fmt_ext_body(7, 1, 8000, 8, 8)), chunk(b"data", &[0xFF])]);
+        assert!(matches!(parse_temp("ext_mulaw", &bytes), Err(DecodeError::UnsupportedFormat(_))));
+        let bytes = riff(&[chunk(b"fmt ", &fmt_body(3, 1, 48000, 16)), chunk(b"data", &[0, 0])]);
+        assert!(matches!(parse_temp("f16", &bytes), Err(DecodeError::UnsupportedFormat(_))));
+        let bytes = riff(&[chunk(b"fmt ", &fmt_body(0x55, 1, 48000, 16)), chunk(b"data", &[0, 0])]);
+        assert!(matches!(parse_temp("mp3tag", &bytes), Err(DecodeError::UnsupportedFormat(_))));
     }
 
     #[test]
