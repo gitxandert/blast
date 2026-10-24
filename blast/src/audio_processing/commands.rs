@@ -824,21 +824,36 @@ impl CmdProcessor {
             })?;
         let name = name.to_string();
 
-        // default assign to Process
+        // default assign to Process:
+        // without -t, the seq owns a Process TempoState of 120 BPM
+        // (one step per beat)
         let mut tempo: TempoRepr = {
             // TODO: find object? needs to be more generic
             let voice = self.find_voice(name.clone())?;
             TempoRepr::new(voice.proc_tempi.len())
         };
+        tempo.init(TempoMode::Process, TempoUnit::Bpm, 120f32);
         let mut period: usize = 4;
         let mut steps: Vec<f32> = Vec::new();
         let mut chance: Vec<f32> = Vec::new();
         let mut jit: Vec<f32> = Vec::new();
         // implement user-defined seed l8r
         let mut rng = X128P::new(fast_seed());
+        // key in the Voice's processes; defaults to the first free
+        // of seq, seq1, seq2...
+        let mut p_name: Option<String> = None;
 
         while let Some(arg) = args.next() {
             match arg {
+                "-n" | "--name" => {
+                    let n_arg = args
+                        .next()
+                        .ok_or(CmdErr::MissingArg {
+                            arg: "name".to_string(),
+                            cmd: "seq -n".to_string(),
+                        })?;
+                    p_name = Some(n_arg.to_string());
+                }
                 "-t" | "--tempo" => {
                     let t_arg = args
                         .next()
@@ -918,6 +933,14 @@ impl CmdProcessor {
                                    cmd: "seq -p".to_string() 
                                })
                         )?;
+
+                    // a period of 0 has no room for steps
+                    if period == 0 {
+                        return Err(CmdErr::InvalidArg {
+                            arg: "0".to_string(),
+                            cmd: "seq -p".to_string(),
+                        });
+                    }
                 }
                 "-s" | "--steps" => {
                     let s_arg = args
@@ -940,9 +963,10 @@ impl CmdProcessor {
                     }
 
                     // set chance and jit Vecs to same len as steps
-                    // to avoid panics
+                    // to avoid panics (jit holds 4 values per step,
+                    // see -j); jit defaults to 0 (no jitter)
                     chance.resize(steps.len(), 100f32);
-                    jit.resize(steps.len(), 100f32);
+                    jit.resize(steps.len() * 4, 0f32);
                 }
                 "-c" | "--chance" => {
                     // a value specifies chance for the step
@@ -1029,13 +1053,16 @@ impl CmdProcessor {
                                                         cmd: "seq -c".to_string(),
                                                     })?;
                                         
+                                        let mut found = false;
                                         for i in {0..steps.len()} {
                                             let step = *steps.get(i).unwrap();
                                             if index == step {
                                                 chance[i] = chance_val;
+                                                found = true;
                                                 break;
                                             }
-                                            // only reaches here if index isn't found
+                                        }
+                                        if !found {
                                             return Err(CmdErr::Formatting {
                                                 err: "Invalid index for seq -c".to_string()
                                             });
@@ -1076,7 +1103,7 @@ impl CmdProcessor {
                                                         arg: i1_str.to_string(),
                                                         cmd: "seq -c".to_string(),
                                                    })?;
-                                        let i2_str = indices.get(0).unwrap();
+                                        let i2_str = indices.get(1).unwrap();
                                         let idx2 = i2_str
                                                    .parse::<f32>()
                                                    .map_err(|_| CmdErr::InvalidArg {
@@ -1129,23 +1156,178 @@ impl CmdProcessor {
                     // e|l indicates jitter before=e and after=l the beat
                     //// (of ranges e-0.0 and 0.0-l)
                     // e1-e2|l1-l2 indicate jitter ranges
+                    // a single value v is shorthand for v|v
                     // n:e|l specifies jitter=e|l for step=n
                     // a:e|l specifies jitter=e|l for all steps
-                    // n1-n2,e1-2|l1-l2 specifies jitter ranges for
+                    // n1-n2:e1-e2|l1-l2 specifies jitter ranges for
                     //// n1-n2 contiguous steps
+                    //
+                    // jit stores 4 values per step, at jit[step_idx * 4..]:
+                    // [early_min, early_max, late_min, late_max]
+                    // (not applied by the engine yet)
+
+                    if steps.len() < 1 {
+                        return Err(CmdErr::Formatting {
+                            err: "Must provide arguments to -s/--steps before -c/--chance or -j/--jitter".to_string()
+                        });
+                    }
+
+                    let j_arg = args.next().ok_or(CmdErr::MissingArg {
+                        arg: "value".to_string(),
+                        cmd: "seq -j".to_string(),
+                    })?;
+
+                    // parses one jitter value: _, v, e|l, or e1-e2|l1-l2
+                    fn parse_jit(spec: &str) -> CmdResult<[f32; 4]> {
+                        if spec == "_" {
+                            return Ok([0f32; 4]);
+                        }
+
+                        let sides: Vec<&str> = spec.split('|').collect();
+                        let (early, late) = match sides.len() {
+                            1 => (sides[0], sides[0]),
+                            2 => (sides[0], sides[1]),
+                            _ => return Err(CmdErr::Formatting {
+                                err: "Jitter must be formatted early|late".to_string()
+                            }),
+                        };
+
+                        let mut out = [0f32; 4];
+                        for (i, side) in [early, late].iter().enumerate() {
+                            let bounds: Vec<&str> = side.split('-').collect();
+                            let mut vals = Vec::<f32>::new();
+                            for b in &bounds {
+                                let val = b
+                                    .parse::<f32>()
+                                    .map_err(|_| CmdErr::InvalidArg {
+                                        arg: spec.to_string(),
+                                        cmd: "seq -j".to_string(),
+                                    })?;
+                                vals.push(val);
+                            }
+
+                            let (min, max) = match vals.len() {
+                                // e is the range 0.0-e
+                                1 => (0f32, vals[0]),
+                                2 => (vals[0].min(vals[1]), vals[0].max(vals[1])),
+                                _ => return Err(CmdErr::Formatting {
+                                    err: "Jitter ranges must be formatted lower-upper".to_string()
+                                }),
+                            };
+                            out[i * 2] = min;
+                            out[i * 2 + 1] = max;
+                        }
+
+                        Ok(out)
+                    }
+
+                    let j_strs: Vec<&str> = j_arg.split(',').collect();
+
+                    for (i, string) in j_strs.iter().enumerate() {
+                        let at_index: Vec<&str> = string.split(':').collect();
+                        if at_index.len() > 2 {
+                            return Err(CmdErr::Formatting {
+                                err: "Indexed jitter arguments must be formatted beat:jitter".to_string(),
+                            });
+                        }
+
+                        // no index; just assign value at current index
+                        // (extra values are ignored, as with -c)
+                        if at_index.len() == 1 {
+                            let vals = parse_jit(string)?;
+                            if i < steps.len() {
+                                jit[i * 4..i * 4 + 4].copy_from_slice(&vals);
+                            }
+                            continue;
+                        }
+
+                        let vals = parse_jit(at_index[1])?;
+                        let index_str = at_index[0];
+
+                        let parse_idx = |s: &str| -> CmdResult<f32> {
+                            s.parse::<f32>().map_err(|_| CmdErr::InvalidArg {
+                                arg: s.to_string(),
+                                cmd: "seq -j".to_string(),
+                            })
+                        };
+
+                        // a: all steps; n1-n2: steps within the range;
+                        // n: the step equal to n
+                        let (lower, upper) = if index_str == "a" {
+                            (f32::NEG_INFINITY, f32::INFINITY)
+                        } else if index_str.contains('-') {
+                            let indices: Vec<&str> = index_str.split('-').collect();
+                            if indices.len() != 2 {
+                                return Err(CmdErr::Formatting {
+                                    err: "Ranges must be formatted lower-upper".to_string(),
+                                });
+                            }
+                            let idx1 = parse_idx(indices[0])?;
+                            let idx2 = parse_idx(indices[1])?;
+                            (idx1.min(idx2), idx1.max(idx2))
+                        } else {
+                            let index = parse_idx(index_str)?;
+                            (index, index)
+                        };
+
+                        let mut found = false;
+                        for idx in 0..steps.len() {
+                            if steps[idx] >= lower && steps[idx] <= upper {
+                                jit[idx * 4..idx * 4 + 4].copy_from_slice(&vals);
+                                found = true;
+                            }
+                        }
+                        if !found {
+                            return Err(CmdErr::Formatting {
+                                err: "seq -j index applies to nothing".to_string()
+                            });
+                        }
+                    }
                 }
                 _ => return Err(CmdErr::InvalidArg { arg: arg.to_owned(), cmd: "seq".to_string() }),
             }
         }
 
+        // a seq must have steps (no default)
+        if steps.is_empty() {
+            return Err(CmdErr::MissingArg {
+                arg: "-s/--steps".to_string(),
+                cmd: "seq".to_string(),
+            });
+        }
+
         // TODO: allow for Idx::Group
         let voice = self.find_voice(name.clone())?;
+
+        // each Process needs its own key so that processes.len()
+        // (and so ProcRepr.idx) matches the engine's Vec<Process>
+        let p_name = match p_name {
+            Some(n) => {
+                if voice.processes.contains_key(&n) {
+                    return Err(CmdErr::AlreadyIs {
+                        ty: "Process".to_string(),
+                        name: n,
+                    });
+                }
+                n
+            }
+            None => {
+                let mut n = "seq".to_string();
+                let mut i = 1;
+                while voice.processes.contains_key(&n) {
+                    n = format!("seq{}", i);
+                    i += 1;
+                }
+                n
+            }
+        };
+
         let repr = ProcRepr::new(
             voice.processes.len(), 
             Idx::Voice(voice.idx), 
             Some(TempoRepr::clone(&tempo))
         );
-        voice.processes.insert("seq".to_string(), repr);
+        voice.processes.insert(p_name, repr);
         // push tempo to proc_tempi only if owned by the Process
         if tempo.mode == TempoMode::Process {
             voice.proc_tempi.insert(
@@ -1370,5 +1552,239 @@ impl fmt::Display for CmdErr {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn processor() -> CmdProcessor {
+        let kick = AudioFile::new("kick", "wav", 48000, 1, 16, vec![0i16; 16]);
+        let mut cp = CmdProcessor::new(EngineState::new(vec![kick], 2));
+        assert!(cp.parse("load kick".to_string()).is_ok());
+        cp
+    }
+
+    fn seq(cp: &mut CmdProcessor, cmd: &str) -> CmdResult<SeqArgs> {
+        match cp.parse(cmd.to_string())? {
+            Command::Seq(args) => Ok(args),
+            _ => panic!("'{}' didn't parse to Command::Seq", cmd),
+        }
+    }
+
+    fn seq_ok(cmd: &str) -> SeqArgs {
+        let mut cp = processor();
+        match seq(&mut cp, cmd) {
+            Ok(args) => args,
+            Err(e) => panic!("'{}' failed: {}", cmd, e),
+        }
+    }
+
+    fn seq_err(cmd: &str) -> CmdErr {
+        let mut cp = processor();
+        match seq(&mut cp, cmd) {
+            Ok(_) => panic!("'{}' should have failed", cmd),
+            Err(e) => e,
+        }
+    }
+
+    #[test]
+    fn seq_default_tempo_is_owned_process() {
+        let args = seq_ok("seq kick -s 0,1");
+        assert!(args.tempo.owned);
+        assert_eq!(args.tempo.mode, TempoMode::Process);
+        assert_eq!(args.tempo.unit, TempoUnit::Bpm);
+        assert_eq!(args.tempo.interval, 120.0);
+    }
+
+    #[test]
+    fn seq_tempo_flag() {
+        let args = seq_ok("seq kick -t m:250 -s 0");
+        assert!(args.tempo.owned);
+        assert_eq!(args.tempo.mode, TempoMode::Process);
+        assert_eq!(args.tempo.unit, TempoUnit::Millis);
+        assert_eq!(args.tempo.interval, 250.0);
+
+        let args = seq_ok("seq kick -t v -s 0");
+        assert!(!args.tempo.owned);
+
+        assert!(matches!(seq_err("seq kick -t x:1 -s 0"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -t b:fast -s 0"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -t b -s 0"), CmdErr::TempoFormatting {}));
+    }
+
+    #[test]
+    fn seq_period_and_steps() {
+        let args = seq_ok("seq kick -p 8 -s 0,1.5,3");
+        assert_eq!(args.period, 8);
+        assert_eq!(args.steps, vec![0.0, 1.5, 3.0]);
+        assert_eq!(args.chance.len(), 3);
+        assert_eq!(args.jit.len(), 3 * 4);
+
+        let args = seq_ok("seq kick -s 0");
+        assert_eq!(args.period, 4);
+
+        assert!(matches!(seq_err("seq kick -p x -s 0"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,x"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -s"), CmdErr::MissingArg { .. }));
+    }
+
+    #[test]
+    fn seq_unknown_flag_and_voice() {
+        assert!(matches!(seq_err("seq kick -s 0 -z"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq snare -s 0"), CmdErr::NoVoice { .. }));
+        assert!(matches!(seq_err("seq"), CmdErr::MissingArg { .. }));
+    }
+    #[test]
+    fn seq_requires_steps() {
+        assert!(matches!(seq_err("seq kick -t b:120"), CmdErr::MissingArg { .. }));
+        assert!(matches!(seq_err("seq kick"), CmdErr::MissingArg { .. }));
+
+        // a rejected seq leaves the mirror untouched
+        let mut cp = processor();
+        assert!(seq(&mut cp, "seq kick -t b:120").is_err());
+        let voice = cp.find_voice("kick".to_string()).unwrap();
+        assert_eq!(voice.processes.len(), 0);
+        assert_eq!(voice.proc_tempi.len(), 0);
+    }
+
+    #[test]
+    fn seq_rejects_zero_period() {
+        assert!(matches!(seq_err("seq kick -p 0 -s 0"), CmdErr::InvalidArg { .. }));
+        assert_eq!(seq_ok("seq kick -p 1 -s 0").period, 1);
+    }
+    #[test]
+    fn seq_chance_at_index() {
+        assert_eq!(seq_ok("seq kick -s 0,1,2 -c 2:50").chance, vec![100.0, 100.0, 50.0]);
+        assert_eq!(seq_ok("seq kick -s 0,1,2 -c 1:50").chance, vec![100.0, 50.0, 100.0]);
+        assert_eq!(seq_ok("seq kick -s 0,1,2 -c 0:50").chance, vec![50.0, 100.0, 100.0]);
+        assert_eq!(seq_ok("seq kick -s 0,1.5 -c 1.5:25").chance, vec![100.0, 25.0]);
+        assert!(matches!(seq_err("seq kick -s 0,1,2 -c 5:50"), CmdErr::Formatting { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1,2 -c x:50"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1,2 -c 1:x"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1,2 -c 1:2:3"), CmdErr::Formatting { .. }));
+    }
+
+    #[test]
+    fn seq_chance_all_positional_and_default() {
+        assert_eq!(seq_ok("seq kick -s 0,1,2").chance, vec![100.0, 100.0, 100.0]);
+        assert_eq!(seq_ok("seq kick -s 0,1,2 -c a:30").chance, vec![30.0, 30.0, 30.0]);
+        assert_eq!(seq_ok("seq kick -s 0,1,2 -c 10,20").chance, vec![10.0, 20.0, 100.0]);
+        assert_eq!(seq_ok("seq kick -s 0,1,2 -c 10,_,30").chance, vec![10.0, 100.0, 30.0]);
+        // extra values are ignored
+        assert_eq!(seq_ok("seq kick -s 0,1 -c 10,20,30").chance, vec![10.0, 20.0]);
+        assert!(matches!(seq_err("seq kick -s 0,1 -c x"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1 -c"), CmdErr::MissingArg { .. }));
+        // -c needs steps first
+        assert!(matches!(seq_err("seq kick -c 50 -s 0,1"), CmdErr::Formatting { .. }));
+    }
+    #[test]
+    fn seq_chance_range() {
+        let s = "seq kick -s 0,1,2,3 -c";
+        assert_eq!(seq_ok(&format!("{} 1-3:20", s)).chance, vec![100.0, 20.0, 20.0, 20.0]);
+        assert_eq!(seq_ok(&format!("{} 3-1:20", s)).chance, vec![100.0, 20.0, 20.0, 20.0]);
+        assert_eq!(seq_ok(&format!("{} 0-1:20", s)).chance, vec![20.0, 20.0, 100.0, 100.0]);
+        assert_eq!(seq_ok(&format!("{} 2-9:20", s)).chance, vec![100.0, 100.0, 20.0, 20.0]);
+        assert_eq!(seq_ok(&format!("{} 1-1:20", s)).chance, vec![100.0, 20.0, 100.0, 100.0]);
+        assert!(matches!(seq_err(&format!("{} 5-9:20", s)), CmdErr::Formatting { .. }));
+        assert!(matches!(seq_err(&format!("{} 1-x:20", s)), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err(&format!("{} 1-3", s)), CmdErr::Formatting { .. }));
+        assert!(matches!(seq_err(&format!("{} 1-2-3:20", s)), CmdErr::Formatting { .. }));
+    }
+    #[test]
+    fn seq_jitter_default_and_none() {
+        assert_eq!(seq_ok("seq kick -s 0,1").jit, vec![0.0; 8]);
+        assert_eq!(seq_ok("seq kick -s 0,1 -j _").jit, vec![0.0; 8]);
+        assert_eq!(seq_ok("seq kick -s 0,1 -j 5|5 -j _,_").jit, vec![0.0; 8]);
+    }
+
+    #[test]
+    fn seq_jitter_values() {
+        // jit[step * 4..] = [early_min, early_max, late_min, late_max]
+        assert_eq!(
+            seq_ok("seq kick -s 0,1 -j 5|10").jit,
+            vec![0.0, 5.0, 0.0, 10.0, 0.0, 0.0, 0.0, 0.0]
+        );
+        assert_eq!(
+            seq_ok("seq kick -s 0,1 -j 3,2-4|8-6").jit,
+            vec![0.0, 3.0, 0.0, 3.0, 2.0, 4.0, 6.0, 8.0]
+        );
+        // extra values are ignored
+        assert_eq!(seq_ok("seq kick -s 0 -j 1,2").jit, vec![0.0, 1.0, 0.0, 1.0]);
+        // -j consumes its value, so later flags still parse
+        let args = seq_ok("seq kick -s 0,1 -j 5|5 -c 1:50");
+        assert_eq!(args.chance, vec![100.0, 50.0]);
+    }
+
+    #[test]
+    fn seq_jitter_indexed() {
+        let j = |s: &str| seq_ok(&format!("seq kick -s 0,1,2 -j {}", s)).jit;
+        let none = [0.0f32; 4];
+        let v = [0.0f32, 5.0, 0.0, 10.0];
+        let cat = |a: [[f32; 4]; 3]| a.concat();
+
+        assert_eq!(j("1:5|10"), cat([none, v, none]));
+        assert_eq!(j("a:5|10"), cat([v, v, v]));
+        assert_eq!(j("1-2:5|10"), cat([none, v, v]));
+        assert_eq!(j("2-1:5|10"), cat([none, v, v]));
+        assert_eq!(j("0:5|10,2:5|10"), cat([v, none, v]));
+
+        assert!(matches!(seq_err("seq kick -s 0,1,2 -j 7:5|10"), CmdErr::Formatting { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1,2 -j 5-9:5|10"), CmdErr::Formatting { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1,2 -j x:5|10"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1,2 -j 1:2:3"), CmdErr::Formatting { .. }));
+    }
+
+    #[test]
+    fn seq_jitter_errors() {
+        assert!(matches!(seq_err("seq kick -s 0,1 -j"), CmdErr::MissingArg { .. }));
+        assert!(matches!(seq_err("seq kick -j 5|5 -s 0,1"), CmdErr::Formatting { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1 -j x"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1 -j 1|2|3"), CmdErr::Formatting { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1 -j 1-2-3"), CmdErr::Formatting { .. }));
+    }
+    fn proc_idx(cp: &mut CmdProcessor, p_name: &str) -> usize {
+        let voice = cp.find_voice("kick".to_string()).unwrap();
+        voice.processes.get(p_name).unwrap().idx
+    }
+
+    #[test]
+    fn seq_default_names_are_unique() {
+        let mut cp = processor();
+        for _ in 0..3 {
+            assert!(seq(&mut cp, "seq kick -s 0").is_ok());
+        }
+        assert_eq!(cp.find_voice("kick".to_string()).unwrap().processes.len(), 3);
+        assert_eq!(proc_idx(&mut cp, "seq"), 0);
+        assert_eq!(proc_idx(&mut cp, "seq1"), 1);
+        assert_eq!(proc_idx(&mut cp, "seq2"), 2);
+        // each owns a Process tempo
+        assert_eq!(cp.find_voice("kick".to_string()).unwrap().proc_tempi.len(), 3);
+    }
+
+    #[test]
+    fn seq_named() {
+        let mut cp = processor();
+        assert!(seq(&mut cp, "seq kick -n hats -s 0").is_ok());
+        assert!(seq(&mut cp, "seq kick --name seq -s 0").is_ok());
+        // default skips names already taken
+        assert!(seq(&mut cp, "seq kick -s 0").is_ok());
+        assert_eq!(proc_idx(&mut cp, "hats"), 0);
+        assert_eq!(proc_idx(&mut cp, "seq"), 1);
+        assert_eq!(proc_idx(&mut cp, "seq1"), 2);
+
+        match seq(&mut cp, "seq kick -n hats -s 0") {
+            Err(CmdErr::AlreadyIs { ty, name }) => {
+                assert_eq!(ty, "Process");
+                assert_eq!(name, "hats");
+            }
+            _ => panic!("duplicate seq name should fail"),
+        }
+        // the failed seq didn't touch the mirror
+        assert_eq!(cp.find_voice("kick".to_string()).unwrap().processes.len(), 3);
+        assert_eq!(cp.find_voice("kick".to_string()).unwrap().proc_tempi.len(), 3);
+
+        assert!(matches!(seq_err("seq kick -s 0 -n"), CmdErr::MissingArg { .. }));
     }
 }
