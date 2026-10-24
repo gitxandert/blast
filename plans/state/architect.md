@@ -365,6 +365,34 @@ the main checkout.
 C1: applied my 4 fixes to `detailed/C1.md` (changelog entry), with line refs
 re-based on 1d39902. `task/C1` currently points at a224767 and must start
 from 1d39902.
+
+**task/C1 @ 936bc55 (2026-10-24): passes. Merged.**
+REQ-024 check: `git diff integrate/wave-1...task/C1` outside
+`commands/**` is exactly the planned call-site edits, all in `936bc55`
+(`runtime.rs` submit arm, `test_util.rs` `run` + import, `processes.rs` test
+`setup` + import, 4 `engine.rs` test lines). `478c63b` touches only
+`commands/**`.
+Checks I ran in `/home/alexander-toth/rust_proj/blast-C1`:
+- 0 build warnings, 225 tests pass, fmt clean, no clippy lints in
+  `commands/**`.
+- No non-test `unwrap`/`expect`. Indexing in `procs/seq.rs` is bounded,
+  because `chance`/`jit` are sized from `steps`.
+- The 4 TODOs are verbatim. `try_seq` is `pub(in crate::audio_processing::commands)`.
+- The only `unsafe` is the moved `CmdQueue` and the `Send`/`Sync` impls on
+  `Command` (R1/E1 remove them).
+7 deviations accepted. #2's label normalisation was approved in the plan,
+and #7 `result_large_err` is allowed with a reason.
+Merge: `c254084 merge: task/C1` (`--no-ff`), then
+`a652f36 docs: list the commands/ modules in the README` (repo README
+module list, from the report's text).
+**Head `a652f36`.** Full checks on `c254084`: 0 build warnings, 225 passed and
+1 ignored (assets and fixtures linked), fmt clean, clippy down to 17
+warnings plus the pre-existing deny error at `engine.rs:40`, and none in
+`commands/**` or `file_parsing/**`.
+**All wave-1 tasks are merged.** Next: the PM's gate summary, then a user
+decision on merging `integrate/wave-1` into `dev`.
+Carry-over for LOAD (owns `file_parsing/mod.rs` in wave 2): make
+`probe_file` sniff AU before raw, as `decode_bytes` does (F1b nit).
 (one section per wave: merge order, results, issues)
 
 ## Clarifications to README (no change in meaning)
