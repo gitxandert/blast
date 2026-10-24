@@ -1421,7 +1421,7 @@ mod group_tests {
         let (mut cp, mut c) = setup(1, vec![track("a", 1, 16), track("b", 2, 16)]);
         run(&mut cp, &mut c, "load a");
         run(&mut cp, &mut c, "load b");
-        assert!(cp.parse("group g -v a,nope".to_string()).is_err());
+        assert!(cp.parse("group g -v a,nope").is_err());
 
         // b is still voices[1] on both sides
         run(&mut cp, &mut c, "velocity b 2");
@@ -1441,12 +1441,12 @@ mod group_tests {
         sample_rate::set(48000);
         let (mut cp, mut c) = setup(1, vec![track("a", 1, 16), track("b", 2, 16)]);
         run(&mut cp, &mut c, "tc x b:120");
-        assert!(cp.parse("tc x b:90".to_string()).is_err());
+        assert!(cp.parse("tc x b:90").is_err());
         run(&mut cp, &mut c, "tc y b:60");
         run(&mut cp, &mut c, "load a");
         run(&mut cp, &mut c, "load b");
         run(&mut cp, &mut c, "group g -v a");
-        assert!(cp.parse("group g -v b".to_string()).is_err());
+        assert!(cp.parse("group g -v b").is_err());
         run(&mut cp, &mut c, "group h -t c:y -v b");
 
         assert_eq!(c.tempo_cons.len(), 2);
@@ -1496,7 +1496,7 @@ mod group_tests {
         run(&mut cp, &mut c, "velocity g.b 2");
         assert_eq!(c.groups[0].voices[0].state.velocity, 2.0);
 
-        assert!(cp.parse("unload g.a".to_string()).is_err());
+        assert!(cp.parse("unload g.a").is_err());
         run(&mut cp, &mut c, "unload c");
         assert!(c.voices.is_empty());
     }

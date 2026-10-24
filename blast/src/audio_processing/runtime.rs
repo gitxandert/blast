@@ -124,8 +124,9 @@ pub fn run_blast(tracks: HashMap<String, AudioFile>, sample_rate: u32, num_chann
 
                         // checks the queue before parsing, so a full
                         // queue can't desync the mirror from the engine
-                        match cmd_processor.submit(cmd, &queue) {
-                            Ok(()) => (),
+                        match cmd_processor.submit(&cmd, &queue) {
+                            Ok(Some(text)) => println!("\n{text}"),
+                            Ok(None) => (),
                             Err(error) => {
                                 buf.clear();
                                 println!("\nErr: {error}");
