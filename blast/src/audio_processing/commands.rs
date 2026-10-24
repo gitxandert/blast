@@ -951,9 +951,10 @@ impl CmdProcessor {
                     }
 
                     // set chance and jit Vecs to same len as steps
-                    // to avoid panics
+                    // to avoid panics (jit holds 4 values per step,
+                    // see -j); jit defaults to 0 (no jitter)
                     chance.resize(steps.len(), 100f32);
-                    jit.resize(steps.len(), 100f32);
+                    jit.resize(steps.len() * 4, 0f32);
                 }
                 "-c" | "--chance" => {
                     // a value specifies chance for the step
@@ -1143,10 +1144,133 @@ impl CmdProcessor {
                     // e|l indicates jitter before=e and after=l the beat
                     //// (of ranges e-0.0 and 0.0-l)
                     // e1-e2|l1-l2 indicate jitter ranges
+                    // a single value v is shorthand for v|v
                     // n:e|l specifies jitter=e|l for step=n
                     // a:e|l specifies jitter=e|l for all steps
-                    // n1-n2,e1-2|l1-l2 specifies jitter ranges for
+                    // n1-n2:e1-e2|l1-l2 specifies jitter ranges for
                     //// n1-n2 contiguous steps
+                    //
+                    // jit stores 4 values per step, at jit[step_idx * 4..]:
+                    // [early_min, early_max, late_min, late_max]
+                    // (not applied by the engine yet)
+
+                    if steps.len() < 1 {
+                        return Err(CmdErr::Formatting {
+                            err: "Must provide arguments to -s/--steps before -c/--chance or -j/--jitter".to_string()
+                        });
+                    }
+
+                    let j_arg = args.next().ok_or(CmdErr::MissingArg {
+                        arg: "value".to_string(),
+                        cmd: "seq -j".to_string(),
+                    })?;
+
+                    // parses one jitter value: _, v, e|l, or e1-e2|l1-l2
+                    fn parse_jit(spec: &str) -> CmdResult<[f32; 4]> {
+                        if spec == "_" {
+                            return Ok([0f32; 4]);
+                        }
+
+                        let sides: Vec<&str> = spec.split('|').collect();
+                        let (early, late) = match sides.len() {
+                            1 => (sides[0], sides[0]),
+                            2 => (sides[0], sides[1]),
+                            _ => return Err(CmdErr::Formatting {
+                                err: "Jitter must be formatted early|late".to_string()
+                            }),
+                        };
+
+                        let mut out = [0f32; 4];
+                        for (i, side) in [early, late].iter().enumerate() {
+                            let bounds: Vec<&str> = side.split('-').collect();
+                            let mut vals = Vec::<f32>::new();
+                            for b in &bounds {
+                                let val = b
+                                    .parse::<f32>()
+                                    .map_err(|_| CmdErr::InvalidArg {
+                                        arg: spec.to_string(),
+                                        cmd: "seq -j".to_string(),
+                                    })?;
+                                vals.push(val);
+                            }
+
+                            let (min, max) = match vals.len() {
+                                // e is the range 0.0-e
+                                1 => (0f32, vals[0]),
+                                2 => (vals[0].min(vals[1]), vals[0].max(vals[1])),
+                                _ => return Err(CmdErr::Formatting {
+                                    err: "Jitter ranges must be formatted lower-upper".to_string()
+                                }),
+                            };
+                            out[i * 2] = min;
+                            out[i * 2 + 1] = max;
+                        }
+
+                        Ok(out)
+                    }
+
+                    let j_strs: Vec<&str> = j_arg.split(',').collect();
+
+                    for (i, string) in j_strs.iter().enumerate() {
+                        let at_index: Vec<&str> = string.split(':').collect();
+                        if at_index.len() > 2 {
+                            return Err(CmdErr::Formatting {
+                                err: "Indexed jitter arguments must be formatted beat:jitter".to_string(),
+                            });
+                        }
+
+                        // no index; just assign value at current index
+                        // (extra values are ignored, as with -c)
+                        if at_index.len() == 1 {
+                            let vals = parse_jit(string)?;
+                            if i < steps.len() {
+                                jit[i * 4..i * 4 + 4].copy_from_slice(&vals);
+                            }
+                            continue;
+                        }
+
+                        let vals = parse_jit(at_index[1])?;
+                        let index_str = at_index[0];
+
+                        let parse_idx = |s: &str| -> CmdResult<f32> {
+                            s.parse::<f32>().map_err(|_| CmdErr::InvalidArg {
+                                arg: s.to_string(),
+                                cmd: "seq -j".to_string(),
+                            })
+                        };
+
+                        // a: all steps; n1-n2: steps within the range;
+                        // n: the step equal to n
+                        let (lower, upper) = if index_str == "a" {
+                            (f32::NEG_INFINITY, f32::INFINITY)
+                        } else if index_str.contains('-') {
+                            let indices: Vec<&str> = index_str.split('-').collect();
+                            if indices.len() != 2 {
+                                return Err(CmdErr::Formatting {
+                                    err: "Ranges must be formatted lower-upper".to_string(),
+                                });
+                            }
+                            let idx1 = parse_idx(indices[0])?;
+                            let idx2 = parse_idx(indices[1])?;
+                            (idx1.min(idx2), idx1.max(idx2))
+                        } else {
+                            let index = parse_idx(index_str)?;
+                            (index, index)
+                        };
+
+                        let mut found = false;
+                        for idx in 0..steps.len() {
+                            if steps[idx] >= lower && steps[idx] <= upper {
+                                jit[idx * 4..idx * 4 + 4].copy_from_slice(&vals);
+                                found = true;
+                            }
+                        }
+                        if !found {
+                            return Err(CmdErr::Formatting {
+                                err: "seq -j index applies to nothing".to_string()
+                            });
+                        }
+                    }
                 }
                 _ => return Err(CmdErr::InvalidArg { arg: arg.to_owned(), cmd: "seq".to_string() }),
             }
@@ -1460,7 +1584,7 @@ mod tests {
         assert_eq!(args.period, 8);
         assert_eq!(args.steps, vec![0.0, 1.5, 3.0]);
         assert_eq!(args.chance.len(), 3);
-        assert_eq!(args.jit.len(), 3);
+        assert_eq!(args.jit.len(), 3 * 4);
 
         let args = seq_ok("seq kick -s 0");
         assert_eq!(args.period, 4);
@@ -1531,5 +1655,57 @@ mod tests {
         assert!(matches!(seq_err(&format!("{} 1-x:20", s)), CmdErr::InvalidArg { .. }));
         assert!(matches!(seq_err(&format!("{} 1-3", s)), CmdErr::Formatting { .. }));
         assert!(matches!(seq_err(&format!("{} 1-2-3:20", s)), CmdErr::Formatting { .. }));
+    }
+    #[test]
+    fn seq_jitter_default_and_none() {
+        assert_eq!(seq_ok("seq kick -s 0,1").jit, vec![0.0; 8]);
+        assert_eq!(seq_ok("seq kick -s 0,1 -j _").jit, vec![0.0; 8]);
+        assert_eq!(seq_ok("seq kick -s 0,1 -j 5|5 -j _,_").jit, vec![0.0; 8]);
+    }
+
+    #[test]
+    fn seq_jitter_values() {
+        // jit[step * 4..] = [early_min, early_max, late_min, late_max]
+        assert_eq!(
+            seq_ok("seq kick -s 0,1 -j 5|10").jit,
+            vec![0.0, 5.0, 0.0, 10.0, 0.0, 0.0, 0.0, 0.0]
+        );
+        assert_eq!(
+            seq_ok("seq kick -s 0,1 -j 3,2-4|8-6").jit,
+            vec![0.0, 3.0, 0.0, 3.0, 2.0, 4.0, 6.0, 8.0]
+        );
+        // extra values are ignored
+        assert_eq!(seq_ok("seq kick -s 0 -j 1,2").jit, vec![0.0, 1.0, 0.0, 1.0]);
+        // -j consumes its value, so later flags still parse
+        let args = seq_ok("seq kick -s 0,1 -j 5|5 -c 1:50");
+        assert_eq!(args.chance, vec![100.0, 50.0]);
+    }
+
+    #[test]
+    fn seq_jitter_indexed() {
+        let j = |s: &str| seq_ok(&format!("seq kick -s 0,1,2 -j {}", s)).jit;
+        let none = [0.0f32; 4];
+        let v = [0.0f32, 5.0, 0.0, 10.0];
+        let cat = |a: [[f32; 4]; 3]| a.concat();
+
+        assert_eq!(j("1:5|10"), cat([none, v, none]));
+        assert_eq!(j("a:5|10"), cat([v, v, v]));
+        assert_eq!(j("1-2:5|10"), cat([none, v, v]));
+        assert_eq!(j("2-1:5|10"), cat([none, v, v]));
+        assert_eq!(j("0:5|10,2:5|10"), cat([v, none, v]));
+
+        assert!(matches!(seq_err("seq kick -s 0,1,2 -j 7:5|10"), CmdErr::Formatting { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1,2 -j 5-9:5|10"), CmdErr::Formatting { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1,2 -j x:5|10"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1,2 -j 1:2:3"), CmdErr::Formatting { .. }));
+    }
+
+    #[test]
+    fn seq_jitter_errors() {
+        assert!(matches!(seq_err("seq kick -s 0,1 -j"), CmdErr::MissingArg { .. }));
+        assert!(matches!(seq_err("seq kick -j 5|5 -s 0,1"), CmdErr::Formatting { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1 -j x"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1 -j 1|2|3"), CmdErr::Formatting { .. }));
+        assert!(matches!(seq_err("seq kick -s 0,1 -j 1-2-3"), CmdErr::Formatting { .. }));
     }
 }

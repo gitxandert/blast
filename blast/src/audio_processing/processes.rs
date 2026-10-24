@@ -224,7 +224,7 @@ mod tests {
                 tempo,
                 period,
                 chance: vec![100.0; steps.len()],
-                jit: vec![0.0; steps.len()],
+                jit: vec![0.0; steps.len() * 4],
                 steps,
                 rng: X128P::new(fast_seed()),
             }));
