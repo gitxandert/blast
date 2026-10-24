@@ -340,7 +340,7 @@ extern "C" fn handle_sigterm(_sig: libc::c_int) {
 fn install_sigterm_handler() {
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = handle_sigterm as usize;
+        sa.sa_sigaction = handle_sigterm as *const () as usize;
         sa.sa_flags = 0;
 
         // non-blocking
