@@ -1090,7 +1090,7 @@ impl CmdProcessor {
                                                         arg: i1_str.to_string(),
                                                         cmd: "seq -c".to_string(),
                                                    })?;
-                                        let i2_str = indices.get(0).unwrap();
+                                        let i2_str = indices.get(1).unwrap();
                                         let idx2 = i2_str
                                                    .parse::<f32>()
                                                    .map_err(|_| CmdErr::InvalidArg {
@@ -1518,5 +1518,18 @@ mod tests {
         assert!(matches!(seq_err("seq kick -s 0,1 -c"), CmdErr::MissingArg { .. }));
         // -c needs steps first
         assert!(matches!(seq_err("seq kick -c 50 -s 0,1"), CmdErr::Formatting { .. }));
+    }
+    #[test]
+    fn seq_chance_range() {
+        let s = "seq kick -s 0,1,2,3 -c";
+        assert_eq!(seq_ok(&format!("{} 1-3:20", s)).chance, vec![100.0, 20.0, 20.0, 20.0]);
+        assert_eq!(seq_ok(&format!("{} 3-1:20", s)).chance, vec![100.0, 20.0, 20.0, 20.0]);
+        assert_eq!(seq_ok(&format!("{} 0-1:20", s)).chance, vec![20.0, 20.0, 100.0, 100.0]);
+        assert_eq!(seq_ok(&format!("{} 2-9:20", s)).chance, vec![100.0, 100.0, 20.0, 20.0]);
+        assert_eq!(seq_ok(&format!("{} 1-1:20", s)).chance, vec![100.0, 20.0, 100.0, 100.0]);
+        assert!(matches!(seq_err(&format!("{} 5-9:20", s)), CmdErr::Formatting { .. }));
+        assert!(matches!(seq_err(&format!("{} 1-x:20", s)), CmdErr::InvalidArg { .. }));
+        assert!(matches!(seq_err(&format!("{} 1-3", s)), CmdErr::Formatting { .. }));
+        assert!(matches!(seq_err(&format!("{} 1-2-3:20", s)), CmdErr::Formatting { .. }));
     }
 }
