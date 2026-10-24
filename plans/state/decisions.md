@@ -44,3 +44,11 @@ Each entry records the date, the decision, and its source (a request ID, or
 - REQ-036: option 1: extension whitelist via `is_supported_extension`; architect amends README §3.2 wording.
 - REQ-043: approve F1a plan, conditional on the architect's fixes (silence sizing, riff_fixup trailing-junk test, Path::new).
 - REQ-044: approve F1b plan, conditional on the architect's editorial fixes.
+
+## Organisation change (2026-10-24)
+
+- Reduce to two agents to cut usage: architect + PM. The architect writes all
+  remaining plans and plan fixes; the PM implements approved plans itself, one
+  task at a time, in worktrees; the architect reviews and merges. Planners,
+  implementers and design subagents are retired. (`ORG.md` top note; user via
+  phone, options "architect creates all plans" and "A: PM implements".)

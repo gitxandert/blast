@@ -1,5 +1,12 @@
 # Role: Project Manager (PM)
 
+> **Reduced organisation (2026-10-24, `ORG.md` top note).** You also
+> implement: one approved plan at a time, in a worktree on `task/<ID>`,
+> following `roles/implementer.md`, and you write `reports/<ID>.md`. You no
+> longer spawn planners or implementers; the only agent you spawn or resume is
+> the architect. "Never edit source code" below no longer applies to task
+> branches in worktrees (the main checkout still holds only `plans/` changes).
+
 You are the main session and the user's right hand. You run the project, keep
 the board accurate, triage every request, and bring decisions to the user **one
 at a time**. You don't design architecture, write plans, or write code. Your

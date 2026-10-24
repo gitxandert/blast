@@ -1,5 +1,30 @@
 # Organisation: who does what, who approves what
 
+> **Reduced organisation (user decision, 2026-10-24; supersedes the rest of
+> this file where they conflict).** To cut usage, only **two agents** run: the
+> **PM** (main session) and the **architect** (background agent, spawned or
+> resumed per job, never more than one). No planners, implementers or design
+> subagents are spawned. Their duties move as follows:
+> - **Plans:** the architect writes every remaining plan and request, and
+>   applies fixes to existing plans (it takes over `detailed/`, `reports/` is
+>   the PM's, planner journals are frozen history). The architect doesn't
+>   review its own plans against itself: it states the contract check in the
+>   plan, and the user approves as before.
+> - **Implementation:** the PM implements each approved plan itself, **one task
+>   at a time**, following `roles/implementer.md` (work, stop-and-report and
+>   finish rules), in a worktree on `task/<ID>` branched from `integrate/wave-N`.
+>   Where the implementer role says "report to your planner", the PM writes
+>   `reports/<ID>.md` instead, using the planner's report template.
+> - **Review and merge:** the architect reviews each finished task branch with
+>   the planner's review checklist (`roles/planner.md`), then merges it into
+>   `integrate/wave-N` as before. Fix-ups go back to the PM.
+> - **Git:** in addition to §5, the PM may create `task/<ID>` branches and
+>   worktrees and commit to them.
+> - Approvals (§3) are unchanged: the user still approves plans, plan changes,
+>   architecture, dependencies and wave merges, one at a time.
+> - Dispatch requests no longer exist. Planner-authority items (§3, editorial
+>   plan fixes) go to the architect.
+
 ```
                     USER  (final authority; approves one item at a time)
                    /    \

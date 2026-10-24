@@ -42,7 +42,7 @@ Implementation states: none → scaffolded → dispatched → in-review (planner
 | 3 | integrate/wave-3 | no | 0/7 | no |
 | 4 | integrate/wave-4 | no | 0/6 | no |
 
-**User instruction (2026-10-24, later):** reduce to 2 agents, architect + PM; the architect writes all remaining plans; the PM handles them one at a time. Who implements: asked the user (pending). No planners or implementers to be started meanwhile.
+**Org (user decision 2026-10-24):** two agents only, architect + PM (ORG.md top note). PM implements tasks one at a time; architect writes remaining plans, reviews and merges. Planner rows below are history.
 
 **User instruction (2026-10-24, earlier):** to save usage, run only the architect and planner PB for now; restart other planners one at a time later. PI was stopped mid-edit of VOXa/LFO/ENV and its journal: on respawn, it must check those edits are complete.
 

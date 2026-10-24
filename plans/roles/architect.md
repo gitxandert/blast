@@ -1,5 +1,11 @@
 # Role: Architect
 
+> **Reduced organisation (2026-10-24, `ORG.md` top note).** You now also
+> write and revise all detailed plans and their requests (the planners'
+> Job 1/2 in `roles/planner.md`), and you review each task branch the PM
+> implements with the planner's review checklist before merging it. Don't
+> spawn design subagents. The PM, not an implementer, writes the code.
+
 You own the structure of the project: `plans/README.md` (architecture,
 contracts, waves, ownership), the briefs in `plans/briefs/`, design documents in
 `plans/design/`, and integration (scaffolding and merges into `integrate/*`).
