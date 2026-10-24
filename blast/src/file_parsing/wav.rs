@@ -27,20 +27,17 @@ impl FormatCode {
     }
 }
 
-pub fn print_id(vec: &mut Vec<u8>, start: &mut usize, end: &mut usize) -> DecodeResult<()> {
+pub fn read_id(vec: &mut Vec<u8>, start: &mut usize, end: &mut usize) -> DecodeResult<[u8; 4]> {
     *end += 4;
 
-    for i in *start..*end {
-        let c = match vec.get(i) {
-            Some(val)   => val,
-            None    => return Err(DecodeError::UnexpectedEof),
-        };
-    }
+    let id: [u8; 4] = match vec.get(*start..*end) {
+        Some(val) => [val[0], val[1], val[2], val[3]],
+        None => return Err(DecodeError::UnexpectedEof),
+    };
 
     *start = *end;
 
-
-    Ok(())
+    Ok(id)
 }
 
 fn parse_bytes(bytes: &mut Vec<u8>, start: &mut usize, end: &mut usize, inc: usize) -> DecodeResult<u32> {
@@ -75,24 +72,61 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     let mut end: usize = 0;
 
     // RIFF
-    // (print_id always increments end by four before printing
+    // (read_id always increments end by four before reading
     //  and sets start to end afterward)
-    print_id(&mut reader, &mut start, &mut end)?;
+    let riff_id = read_id(&mut reader, &mut start, &mut end)?;
 
     // (parse_bytes increments end by the integer argument
     //  before decoding the reader from start to end
     //  and sets start to end afterward))
-    let riff_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
+    // riff size is often wrong in the wild, so chunks are bounded by the file instead
+    parse_bytes(&mut reader, &mut start, &mut end, 4)?;
 
     // WAVE
-    print_id(&mut reader, &mut start, &mut end)?;
+    let wave_id = read_id(&mut reader, &mut start, &mut end)?;
 
-    // "fmt "
-    print_id(&mut reader, &mut start,&mut end)?;        
+    if &riff_id != b"RIFF" || &wave_id != b"WAVE" {
+        return Err(DecodeError::InvalidData("Not a RIFF/WAVE file".to_string()));
+    }
 
-    let fmt_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
-    // fmt data begins here; used to skip to the end of the chunk
-    let fmt_start: usize = start;
+    // walk chunks until both "fmt " and "data" are found;
+    // each is (start of chunk data, chunk size)
+    let mut fmt_chunk: Option<(usize, u32)> = None;
+    let mut data_chunk: Option<(usize, u32)> = None;
+
+    while start + 8 <= reader.len() && (fmt_chunk.is_none() || data_chunk.is_none()) {
+        let id = read_id(&mut reader, &mut start, &mut end)?;
+        let size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
+
+        match &id {
+            b"fmt " => fmt_chunk = Some((start, size)),
+            b"data" => data_chunk = Some((start, size)),
+            // LIST, fact, bext, JUNK, cue , ...
+            _ => {}
+        }
+
+        if (&id == b"fmt " || &id == b"data") && start + size as usize > reader.len() {
+            return Err(DecodeError::UnexpectedEof);
+        }
+
+        // chunks are padded to an even size
+        end = start + size as usize + (size & 1) as usize;
+        start = end;
+    }
+
+    let Some((fmt_start, fmt_size)) = fmt_chunk else {
+        return Err(DecodeError::InvalidData("Missing fmt chunk".to_string()));
+    };
+    let Some((data_start, data_size)) = data_chunk else {
+        return Err(DecodeError::InvalidData("Missing data chunk".to_string()));
+    };
+
+    if fmt_size < 16 {
+        return Err(DecodeError::InvalidData(format!("fmt chunk too small ({fmt_size} bytes)")));
+    }
+
+    start = fmt_start;
+    end = fmt_start;
 
     let Some(fmt_tag) = FormatCode::from_u16(parse_bytes(&mut reader, &mut start, &mut end, 2)?.try_into().unwrap())
     else {
@@ -118,14 +152,14 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
         // extension is either 0 or 22
         let cb_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
 
-        if cb_size > 0 {
+        if cb_size >= 22 && fmt_size >= 40 {
             let valid_bits: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
 
             let dw_channel_mask: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
 
             let old_fmt: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
 
-            // rest of the SubFormat GUID is skipped below
+            // rest of the SubFormat GUID is ignored
             // TODO: compare against audio media subtype
             if fmt_tag == FormatCode::WaveFormatExtensible {
                 sample_fmt = match FormatCode::from_u16(old_fmt as u16) {
@@ -139,20 +173,13 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
         }
     }
 
-    // skip whatever is left of the fmt chunk
-    end = fmt_start + fmt_size as usize;
-    start = end;
-
-
     //
     // TODO: parse "fact" chunk if non-PCM (and if exists)
     //
 
     // "data"
-    print_id(&mut reader, &mut start, &mut end)?;
-    let data_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
-   
-    end += data_size as usize;
+    start = data_start;
+    end = data_start + data_size as usize;
     let data: &[u8] = match reader.get(start..end) {
         Some(val) => val,
         None => return Err(DecodeError::UnexpectedEof),
@@ -338,6 +365,59 @@ mod tests {
         assert!(matches!(parse_temp("f16", &bytes), Err(DecodeError::UnsupportedFormat(_))));
         let bytes = riff(&[chunk(b"fmt ", &fmt_body(0x55, 1, 48000, 16)), chunk(b"data", &[0, 0])]);
         assert!(matches!(parse_temp("mp3tag", &bytes), Err(DecodeError::UnsupportedFormat(_))));
+    }
+
+    #[test]
+    fn skips_list_chunk_between_fmt_and_data() {
+        let bytes = riff(&[
+            chunk(b"fmt ", &fmt_body(1, 2, 48000, 16)),
+            chunk(b"LIST", b"INFOISFT\x05\x00\x00\x00blast\x00"),
+            chunk(b"data", &i16_data(&SAMPLES)),
+        ]);
+        assert_eq!(parse_temp("list", &bytes).unwrap().samples, SAMPLES.to_vec());
+    }
+
+    #[test]
+    fn honours_pad_byte_of_odd_sized_chunk() {
+        let bytes = riff(&[
+            chunk(b"JUNK", &[1, 2, 3]),
+            chunk(b"fmt ", &fmt_body(1, 1, 48000, 16)),
+            chunk(b"bext", &[9; 7]),
+            chunk(b"data", &i16_data(&SAMPLES)),
+        ]);
+        // odd chunks really are padded in the test data
+        assert_eq!(bytes.len(), 12 + (8 + 4) + (8 + 16) + (8 + 8) + (8 + 12));
+        let file = parse_temp("pad", &bytes).unwrap();
+        assert_eq!(file.num_channels, 1);
+        assert_eq!(file.samples, SAMPLES.to_vec());
+    }
+
+    #[test]
+    fn data_before_fmt() {
+        let bytes = riff(&[chunk(b"data", &i16_data(&SAMPLES)), chunk(b"fmt ", &fmt_body(1, 2, 44100, 16))]);
+        let file = parse_temp("datafirst", &bytes).unwrap();
+        assert_eq!(file.sample_rate, 44100);
+        assert_eq!(file.samples, SAMPLES.to_vec());
+    }
+
+    #[test]
+    fn wrong_magic_is_invalid() {
+        let mut bytes = riff(&[chunk(b"fmt ", &fmt_body(1, 2, 48000, 16)), chunk(b"data", &i16_data(&SAMPLES))]);
+        bytes[8..12].copy_from_slice(b"AVI ");
+        assert!(matches!(parse_temp("avi", &bytes), Err(DecodeError::InvalidData(_))));
+        bytes[0..4].copy_from_slice(b"FORM");
+        bytes[8..12].copy_from_slice(b"WAVE");
+        assert!(matches!(parse_temp("form", &bytes), Err(DecodeError::InvalidData(_))));
+    }
+
+    #[test]
+    fn missing_chunks_are_errors() {
+        let bytes = riff(&[chunk(b"fmt ", &fmt_body(1, 2, 48000, 16)), chunk(b"LIST", &[0; 4])]);
+        assert!(matches!(parse_temp("nodata", &bytes), Err(DecodeError::InvalidData(_))));
+        let bytes = riff(&[chunk(b"data", &i16_data(&SAMPLES))]);
+        assert!(matches!(parse_temp("nofmt", &bytes), Err(DecodeError::InvalidData(_))));
+        let bytes = riff(&[chunk(b"fmt ", &[1, 0, 2, 0]), chunk(b"data", &i16_data(&SAMPLES))]);
+        assert!(matches!(parse_temp("shortfmt", &bytes), Err(DecodeError::InvalidData(_))));
     }
 
     #[test]
