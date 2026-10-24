@@ -58,6 +58,13 @@ impl Conductor {
                     group.tick();
                 }
 
+                // TempoContexts belong to the Conductor; ticked here,
+                // outside the Voice/Group loops, so nothing else
+                // holds a borrow of them
+                for tc in &self.tempo_cons {
+                    tc.borrow_mut().update(1.0);
+                }
+
                 for ch in 0..self.out_channels {
                     let a = &areas[ch];
                     let base = a.addr as *mut u8;
@@ -830,6 +837,39 @@ mod tests {
     fn mix_sums_small_values_exactly() {
         assert!(render_two_voices(1000, 2000).iter().all(|&s| s == 3000));
         assert!(render_two_voices(1000, -3000).iter().all(|&s| s == -2000));
+    }
+
+    #[test]
+    fn tempo_context_ticks_once_per_frame_while_active() {
+        sample_rate::set(48000);
+        let mut c = conductor(2, vec![track("t", 2, 2000, 100)]);
+        c.apply(Command::Tc(TcArgs { tempo: tempo(TempoMode::Context, 100.0) }));
+        // a Voice synced to the context shares its TempoState
+        let mut synced = tempo(TempoMode::Context, 100.0);
+        synced.owned = false;
+        c.apply(Command::Load(LoadArgs { track_idx: 0, tempo_repr: synced }));
+
+        // not started yet
+        render(&mut c, 2, 10);
+        assert_eq!(c.tempo_cons[0].borrow().current, 0);
+
+        c.apply(Command::Start(StartArgs { idx: Idx::Tempo(0) }));
+        start_voice(&mut c, 0);
+        render(&mut c, 2, 100);
+        assert_eq!(c.tempo_cons[0].borrow().current, 100);
+        assert_eq!(c.voices[0].state.tempo.borrow().current, 100);
+
+        c.apply(Command::Pause(PauseArgs { idx: Idx::Tempo(0) }));
+        render(&mut c, 2, 50);
+        assert_eq!(c.tempo_cons[0].borrow().current, 100);
+
+        c.apply(Command::Resume(ResumeArgs { idx: Idx::Tempo(0) }));
+        render(&mut c, 2, 50);
+        assert_eq!(c.tempo_cons[0].borrow().current, 150);
+
+        c.apply(Command::Stop(StopArgs { idx: Idx::Tempo(0) }));
+        render(&mut c, 2, 50);
+        assert_eq!(c.tempo_cons[0].borrow().current, 0);
     }
 
     #[test]

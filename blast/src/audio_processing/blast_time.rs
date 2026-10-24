@@ -110,7 +110,10 @@ pub mod blast_time {
         }
 
         // store current as AtomicU32
+        //
+        // paused/stopped TempoStates don't advance
         pub fn update(&mut self, delta_in_samples: f64) {
+            if !self.active { return; }
             self.current += delta_in_samples as u32;
         }
 
@@ -158,5 +161,94 @@ pub mod blast_time {
         let interval_in_samples = sample_rate::get() as f32 * frac;
        
         interval_in_samples
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::blast_time::*;
+
+    fn tempo(unit: TempoUnit, interval: f32) -> TempoState {
+        sample_rate::set(48000);
+        let mut ts = TempoState::new(None);
+        ts.init(TempoMode::Context, unit, interval);
+        ts
+    }
+
+    #[test]
+    fn new_defaults_to_one_second_tbd() {
+        sample_rate::set(48000);
+        let ts = TempoState::new(None);
+        assert_eq!(ts.mode, TempoMode::TBD);
+        assert_eq!(ts.interval, 48000.0);
+        assert!(!ts.active);
+        assert_eq!(ts.current, 0);
+    }
+
+    #[test]
+    fn init_converts_interval_to_samples() {
+        assert_eq!(tempo(TempoUnit::Samples, 100.0).interval, 100.0);
+        assert_eq!(tempo(TempoUnit::Millis, 500.0).interval, 24000.0);
+        assert_eq!(tempo(TempoUnit::Bpm, 120.0).interval, 24000.0);
+    }
+
+    #[test]
+    fn set_interval_keeps_unit() {
+        let mut ts = tempo(TempoUnit::Bpm, 120.0);
+        ts.set_interval(60.0);
+        assert_eq!(ts.interval, 48000.0);
+    }
+
+    #[test]
+    fn current_is_steps_of_interval() {
+        let mut ts = tempo(TempoUnit::Samples, 100.0);
+        ts.start();
+        for _ in 0..250 {
+            ts.update(1.0);
+        }
+        assert_eq!(ts.current, 250);
+        assert_eq!(ts.current(), 2.5);
+    }
+
+    #[test]
+    fn update_only_advances_while_active() {
+        let mut ts = tempo(TempoUnit::Samples, 100.0);
+        ts.update(1.0);
+        assert_eq!(ts.current, 0);
+
+        ts.start();
+        ts.update(1.0);
+        assert_eq!(ts.current, 1);
+
+        ts.pause();
+        ts.update(1.0);
+        assert_eq!(ts.current, 1);
+
+        ts.resume();
+        ts.update(1.0);
+        assert_eq!(ts.current, 2);
+    }
+
+    #[test]
+    fn start_stop_reset() {
+        let mut ts = tempo(TempoUnit::Samples, 100.0);
+        ts.start();
+        ts.update(5.0);
+        assert_eq!(ts.current, 5);
+
+        ts.reset();
+        assert_eq!(ts.current, 0);
+        assert!(ts.active);
+
+        ts.update(5.0);
+        ts.stop();
+        assert_eq!(ts.current, 0);
+        assert!(!ts.active);
+
+        ts.update(5.0);
+        ts.start();
+        assert_eq!(ts.current, 0);
+        assert!(ts.active);
     }
 }
