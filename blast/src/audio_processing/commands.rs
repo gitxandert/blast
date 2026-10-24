@@ -137,6 +137,8 @@ pub struct VelocityArgs {
 pub struct GroupArgs {
     pub tempo: TempoRepr,
     pub vs_fs_ps: Vec<(usize, bool, Vec<usize>)>, 
+    // in Group order (entry i becomes the Group's Voice i,
+    // matching the VoiceRepr idx in the GroupRepr),
     // store the ids Voice
     // with whether or not its TempoState refers to the Group's
     // and with the ids of all of the Processes 
@@ -759,19 +761,14 @@ impl CmdProcessor {
 
         self.engine_state.groups.insert(name.to_string(), group);
 
-        let mut vs_fs_ps: Vec<(usize, bool, Vec<usize>)> = 
+        // keep Group order; the engine removes Voices from
+        // Conductor.voices in reverse itself
+        let vs_fs_ps: Vec<(usize, bool, Vec<usize>)> = 
             v_ids.into_iter()
                  .zip(v_flags)
                  .zip(p_ids)
                  .map(|((a, b), c) | (a, b, c))
                  .collect();
-        // sort in reverse so that Voices are removed from
-        // Conductor.voices in reverse
-        vs_fs_ps.sort_by(|a, b| {
-            let (va, _, _) = a;
-            let (vb, _, _) = b;
-            vb.cmp(va)
-        });
 
         Ok(Command::Group(GroupArgs { tempo, vs_fs_ps }))
     }
@@ -1542,5 +1539,38 @@ mod tests {
         assert!(!t.owned);
         assert_eq!(t.mode, TempoMode::Group);
         assert_eq!(t.idx, 0);
+    }
+
+    // grouping
+
+    fn group_args(cmd: Command) -> GroupArgs {
+        match cmd {
+            Command::Group(args) => args,
+            _ => panic!("not a Group"),
+        }
+    }
+
+    fn gv_idx(cp: &CmdProcessor, group: &str, voice: &str) -> usize {
+        cp.engine_state.groups.get(group).unwrap().voices.get(voice).unwrap().idx
+    }
+
+    #[test]
+    fn group_voice_order_matches_command_line() {
+        let mut cp = processor(&["a", "b", "c"]);
+        ok(&mut cp, "load a");
+        ok(&mut cp, "load b");
+        ok(&mut cp, "load c");
+        let args = group_args(ok(&mut cp, "group g -v c,a"));
+
+        // in-group order is c, a
+        assert_eq!(gv_idx(&cp, "g", "c"), 0);
+        assert_eq!(gv_idx(&cp, "g", "a"), 1);
+        // GroupArgs entries are in that same order, holding original idx
+        let ids: Vec<usize> = args.vs_fs_ps.iter().map(|(i, _, _)| *i).collect();
+        assert_eq!(ids, vec![2, 0]);
+        // remaining top-level voice shifted down
+        assert_eq!(v_idx(&cp, "b"), 0);
+        assert!(cp.engine_state.voices.get("a").is_none());
+        assert_eq!(cp.engine_state.groups.get("g").unwrap().idx, 0);
     }
 }

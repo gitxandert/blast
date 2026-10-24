@@ -190,22 +190,32 @@ impl Conductor {
 
     fn group(&mut self, args: GroupArgs) {
        let tempo = self.tempo_from_repr(args.tempo);
-       let mut voices: Vec<Voice> = Vec::new();
-       for (idx, update_tempo, p_ids) in args.vs_fs_ps {
+       let vs_fs_ps = args.vs_fs_ps;
+
+       // vs_fs_ps is in Group order; remove Voices in reverse idx
+       // order so each removal doesn't shift the ones still to come,
+       // then put each Voice in its slot in the Group
+       let mut order: Vec<usize> = (0..vs_fs_ps.len()).collect();
+       order.sort_by(|a, b| vs_fs_ps[*b].0.cmp(&vs_fs_ps[*a].0));
+
+       let mut slots: Vec<Option<Voice>> = vs_fs_ps.iter().map(|_| None).collect();
+       for pos in order {
+           let (idx, update_tempo, p_ids) = &vs_fs_ps[pos];
            // move Voices out of conductor.voices into group.voices
-           let mut voice = self.voices.remove(idx);
-           if update_tempo {
+           let mut voice = self.voices.remove(*idx);
+           if *update_tempo {
                // refer to Group TempoState
                voice.state.tempo = Rc::clone(&tempo);
                for p in p_ids {
                    // these Processes also refer to the 
                    // Group TempoState
-                   let mut process = &mut voice.processes[p];
+                   let process = &mut voice.processes[*p];
                    process.update_tempo(Rc::clone(&tempo));
                }
            }
-           voices.push(voice);
+           slots[pos] = Some(voice);
        }
+       let voices: Vec<Voice> = slots.into_iter().map(|v| v.unwrap()).collect();
 
        let group = Group::new(voices, tempo);
        self.groups.push(group);
@@ -568,7 +578,7 @@ impl Group {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio_processing::test_util::{setup, run, track};
+    use crate::audio_processing::test_util::{setup, run, track, render};
 
     fn seq_tempo(p: &Process) -> Rc<RefCell<TempoState>> {
         match p {
@@ -634,5 +644,46 @@ mod tests {
 
         assert!(Rc::ptr_eq(&c.voices[0].state.tempo, &c.tempo_cons[1]));
         assert!(Rc::ptr_eq(&seq_tempo(&c.voices[0].processes[0]), &c.tempo_cons[0]));
+    }
+
+    // grouping
+
+    // tracks are constant-valued, so samples[0] identifies a Voice
+    fn id(v: &Voice) -> i16 {
+        v.samples[0]
+    }
+
+    #[test]
+    fn group_voices_follow_mirror_order() {
+        sample_rate::set(48000);
+        for (cmd, want) in [("group g -v c,a", [3, 1]), ("group g -v a,c", [1, 3])] {
+            let (mut cp, mut c) = setup(1, vec![
+                track("a", 1, 16), track("b", 2, 16), track("c", 3, 16),
+            ]);
+            run(&mut cp, &mut c, "load a");
+            run(&mut cp, &mut c, "load b");
+            run(&mut cp, &mut c, "load c");
+            run(&mut cp, &mut c, cmd);
+
+            let g = &c.groups[0];
+            assert_eq!(g.voices.len(), 2);
+            assert_eq!(id(&g.voices[0]), want[0]);
+            assert_eq!(id(&g.voices[1]), want[1]);
+            assert_eq!(c.voices.len(), 1);
+            assert_eq!(id(&c.voices[0]), 2);
+        }
+    }
+
+    #[test]
+    fn grouped_voices_play_through_the_group() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("a", 100, 16), track("b", 20, 16)]);
+        run(&mut cp, &mut c, "load a");
+        run(&mut cp, &mut c, "load b");
+        run(&mut cp, &mut c, "group g -v b,a");
+        run(&mut cp, &mut c, "start -g g");
+
+        let out = render(&mut c, 1, 4);
+        assert_eq!(out[0], 120);
     }
 }
