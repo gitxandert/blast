@@ -159,7 +159,7 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
 
     let num_channels: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
 
-    let _num_frames: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
+    let num_frames: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
 
     let sample_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 2)?;
 
@@ -169,18 +169,32 @@ pub fn parse(path: &str) -> DecodeResult<AudioFile> {
     start = ssnd_start;
     end = ssnd_start;
 
-    let ssnd_size: u32 = ssnd_chunk_size - 8;
+    // size of the sample data after offset and block_size
+    let Some(ssnd_size) = ssnd_chunk_size.checked_sub(8) else {
+        return Err(DecodeError::InvalidData(format!("SSND chunk too small ({ssnd_chunk_size} bytes)")));
+    };
 
-    // typically 0
-    let _offset: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
+    // bytes to skip before the first sample; typically 0
+    let offset: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
     // also typically 0
     let _block_size: u32 = parse_bytes(&mut reader, &mut start, &mut end, 4)?;
 
+    if offset > ssnd_size {
+        return Err(DecodeError::InvalidData(format!("SSND offset {offset} exceeds data size {ssnd_size}")));
+    }
+
+    start += offset as usize;
     end += ssnd_size as usize;
     let data: &[u8] = match reader.get(start..end) {
         Some(val) => val,
         None => return Err(DecodeError::UnexpectedEof),
     };
+
+    // never read past the frames COMM declares
+    let frame_bytes: usize = (num_frames as usize)
+        .saturating_mul(num_channels as usize)
+        .saturating_mul(sample_size.div_ceil(8) as usize);
+    let data: &[u8] = &data[..data.len().min(frame_bytes)];
 
     // 8-bit AIFF is signed
     let samples: Vec<i16> = pcm_to_i16(data, sample_size, true, false)?;
@@ -359,6 +373,65 @@ mod tests {
         let bytes = form(b"AIFF", &[chunk(b"COMM", &comm_body(1, 4, 16, 44100)), chunk(b"SSND", &ssnd_body(0, &[0; 8]))]);
         assert!(matches!(parse_temp("trunc", &bytes[..bytes.len() - 3]), Err(DecodeError::UnexpectedEof)));
         assert!(matches!(parse_temp("trunc_hdr", &bytes[..6]), Err(DecodeError::UnexpectedEof)));
+    }
+
+    #[test]
+    fn tiny_ssnd_is_error_not_panic() {
+        let bytes = form(b"AIFF", &[chunk(b"COMM", &comm_body(1, 1, 16, 44100)), chunk(b"SSND", &[0; 4])]);
+        assert!(matches!(parse_temp("ssnd4", &bytes), Err(DecodeError::InvalidData(_))));
+        let bytes = form(b"AIFF", &[chunk(b"COMM", &comm_body(1, 1, 16, 44100)), chunk(b"SSND", &[])]);
+        assert!(matches!(parse_temp("ssnd0", &bytes), Err(DecodeError::InvalidData(_))));
+    }
+
+    #[test]
+    fn ssnd_offset_is_skipped() {
+        let mut data = vec![0xEE; 4];
+        data.extend_from_slice(&[0x12, 0x34, 0x80, 0x00]);
+        let bytes = form(b"AIFF", &[chunk(b"COMM", &comm_body(1, 2, 16, 44100)), chunk(b"SSND", &ssnd_body(4, &data))]);
+        assert_eq!(parse_temp("offset", &bytes).unwrap().samples, vec![0x1234, i16::MIN]);
+
+        let bytes = form(b"AIFF", &[chunk(b"COMM", &comm_body(1, 2, 16, 44100)), chunk(b"SSND", &ssnd_body(9, &data))]);
+        assert!(matches!(parse_temp("bigoffset", &bytes), Err(DecodeError::InvalidData(_))));
+    }
+
+    #[test]
+    fn reads_only_num_frames() {
+        let samples = [1i16, 2, 3, 4, 5, 6];
+        let data: Vec<u8> = samples.iter().flat_map(|s| s.to_be_bytes()).collect();
+        // 2 stereo frames declared, 3 in the chunk
+        let bytes = form(b"AIFF", &[chunk(b"COMM", &comm_body(2, 2, 16, 44100)), chunk(b"SSND", &ssnd_body(0, &data))]);
+        assert_eq!(parse_temp("frames", &bytes).unwrap().samples, vec![1, 2, 3, 4]);
+        // more frames declared than present: read what is there
+        let bytes = form(b"AIFF", &[chunk(b"COMM", &comm_body(2, 10, 16, 44100)), chunk(b"SSND", &ssnd_body(0, &data))]);
+        assert_eq!(parse_temp("frames_over", &bytes).unwrap().samples, samples.to_vec());
+    }
+
+    #[test]
+    fn ieee_extended_rates() {
+        let known: [(f64, [u8; 10]); 3] = [
+            (44100.0, [0x40, 0x0E, 0xAC, 0x44, 0, 0, 0, 0, 0, 0]),
+            (48000.0, [0x40, 0x0E, 0xBB, 0x80, 0, 0, 0, 0, 0, 0]),
+            (96000.0, [0x40, 0x0F, 0xBB, 0x80, 0, 0, 0, 0, 0, 0]),
+        ];
+        for (rate, bytes) in known {
+            assert_eq!(extended(rate as u32), bytes);
+            let mut v = bytes.to_vec();
+            let (mut start, mut end) = (0, 0);
+            assert_eq!(parse_ieee_extended(&mut v, &mut start, &mut end).unwrap(), rate);
+            assert_eq!((start, end), (10, 10));
+        }
+        let mut short = vec![0x40, 0x0E, 0xAC];
+        assert!(matches!(parse_ieee_extended(&mut short, &mut 0, &mut 0), Err(DecodeError::UnexpectedEof)));
+    }
+
+    #[test]
+    fn parse_bytes_big_endian() {
+        let mut bytes = vec![0x12, 0x34, 0x12, 0x34, 0x56, 0x78, 0xFF];
+        let (mut start, mut end) = (0, 0);
+        assert_eq!(parse_bytes(&mut bytes, &mut start, &mut end, 2).unwrap(), 0x1234);
+        assert_eq!(parse_bytes(&mut bytes, &mut start, &mut end, 4).unwrap(), 0x12345678);
+        assert_eq!((start, end), (6, 6));
+        assert!(matches!(parse_bytes(&mut bytes, &mut start, &mut end, 2), Err(DecodeError::UnexpectedEof)));
     }
 
     #[test]
