@@ -626,8 +626,8 @@ impl CmdProcessor {
                                         cmd: "group -t".to_string() 
                                     })?;
 
-                                match self.find_tc(name.to_string()) {
-                                    Ok(tc) => tempo = TempoRepr::clone(&tc),
+                                match self.find_tc(tc_name.to_string()) {
+                                    Ok(tc) => tempo = TempoRepr::clone_owner(&tc),
                                     Err(error) => return Err(error.into()),
                                 }
                             } else {
@@ -1658,5 +1658,60 @@ mod tests {
         }
         let gv = cp.engine_state.groups.get("g").unwrap().voices.get("b").unwrap();
         assert_eq!(gv.processes.len(), 1);
+    }
+
+    // group tempo (B12)
+
+    #[test]
+    fn group_default_tempo_is_owned() {
+        let mut cp = processor(&["a"]);
+        ok(&mut cp, "load a");
+        let args = group_args(ok(&mut cp, "group g -v a"));
+        assert!(args.tempo.owned);
+        assert_eq!(args.tempo.mode, TempoMode::Group);
+        assert_eq!(args.tempo.unit, TempoUnit::Bpm);
+        assert_eq!(args.tempo.interval, 240.0);
+
+        let mut cp = processor(&["a"]);
+        ok(&mut cp, "load a");
+        let args = group_args(ok(&mut cp, "group g -t m:250 -v a"));
+        assert!(args.tempo.owned);
+        assert_eq!(args.tempo.mode, TempoMode::Group);
+        assert_eq!(args.tempo.unit, TempoUnit::Millis);
+        assert_eq!(args.tempo.interval, 250.0);
+    }
+
+    #[test]
+    fn group_shares_named_context() {
+        let mut cp = processor(&["a"]);
+        ok(&mut cp, "tc other b:60");
+        ok(&mut cp, "tc clk b:120");
+        ok(&mut cp, "load a");
+        let args = group_args(ok(&mut cp, "group g -t c:clk -v a"));
+        assert!(!args.tempo.owned);
+        assert_eq!(args.tempo.mode, TempoMode::Context);
+        assert_eq!(args.tempo.idx, 1);
+        // the TBD voice follows the group, i.e. the context
+        let (_, follows, _) = args.vs_fs_ps[0];
+        assert!(follows);
+        let a = cp.engine_state.groups.get("g").unwrap().voices.get("a").unwrap();
+        assert_eq!(a.tempo.mode, TempoMode::Context);
+        assert_eq!(a.tempo.idx, 1);
+    }
+
+    #[test]
+    fn group_tempo_errors() {
+        let mut cp = processor(&["a"]);
+        ok(&mut cp, "tc clk b:120");
+        ok(&mut cp, "load a");
+        assert!(matches!(err(&mut cp, "group g -t c:nope -v a"), CmdErr::NoItem { .. }));
+        assert!(matches!(err(&mut cp, "group g -t c"), CmdErr::MissingArg { .. }));
+        assert!(matches!(err(&mut cp, "group g -t x:1"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(err(&mut cp, "group g -t b"), CmdErr::MissingArg { .. }));
+        assert!(matches!(err(&mut cp, "group g -t b:fast"), CmdErr::InvalidArg { .. }));
+        assert!(matches!(err(&mut cp, "group g -t"), CmdErr::MissingArg { .. }));
+        assert!(matches!(err(&mut cp, "group"), CmdErr::MissingArg { .. }));
+        assert!(matches!(err(&mut cp, "group g -x"), CmdErr::InvalidArg { .. }));
+        assert!(cp.engine_state.groups.is_empty());
     }
 }

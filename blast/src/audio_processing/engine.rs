@@ -778,4 +778,21 @@ mod tests {
         assert!(c.groups[0].voices[0].processes.is_empty());
         assert!(c.voices[0].processes.is_empty());
     }
+
+    // group tempo (B12)
+
+    #[test]
+    fn group_shares_context_rc() {
+        sample_rate::set(48000);
+        let (mut cp, mut c) = setup(1, vec![track("a", 1, 16)]);
+        run(&mut cp, &mut c, "tc other b:60");
+        run(&mut cp, &mut c, "tc clk b:120");
+        run(&mut cp, &mut c, "load a");
+        run(&mut cp, &mut c, "group g -t c:clk -v a");
+
+        let g = &c.groups[0];
+        assert!(Rc::ptr_eq(&g.state.tempo, &c.tempo_cons[1]));
+        assert!(Rc::ptr_eq(&g.voices[0].state.tempo, &c.tempo_cons[1]));
+        assert_eq!(g.state.tempo.borrow().mode, TempoMode::Context);
+    }
 }
