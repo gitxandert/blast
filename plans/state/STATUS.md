@@ -1,6 +1,6 @@
 # Project status (PM-owned)
 
-**Phase:** 0 (not started)
+**Phase:** 1 (planning)
 **Updated:** 2026-10-24
 
 Phases: 0 not started · 1 planning · 2 wave 1 · 3 wave 2 · 4 wave 3 · 5 wave 4 · 6 done
@@ -48,3 +48,10 @@ Implementation states: none → scaffolded → dispatched → in-review (planner
 
 | Agent | Role | Scope | Spawned | State |
 |---|---|---|---|---|
+| architect | Architect | scaffold step 0 on integrate/wave-1; plan reviews | 2026-10-24 | running |
+| planner-PA | Planner | PA-core (C1, E1, R1) | 2026-10-24 | planning |
+| planner-PB | Planner | PB-audio-files (F1, LOAD, TRK) | 2026-10-24 | planning |
+| planner-PF | Planner | PF-shell-repl (SH, REPL) | 2026-10-24 | planning |
+| planner-PH | Planner | PH-engine-commands (GRP, TMP, PRC, INS) | 2026-10-24 | planning |
+| planner-PI | Planner | PI-voice-dsp (VOX, LFO, ENV, EUC, FX) | 2026-10-24 | planning |
+| planner-PJ | Planner | PJ-recording (REC) | 2026-10-24 | planning |
