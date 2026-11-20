@@ -1,0 +1,26 @@
+# WAVd: an electric-piano-like voice. Two sine modulators (ratio 1 and 14, the
+# second quiet) phase-modulate one sine carrier as a set (fm=a+b), and the
+# carrier has a little feedback. An env sweeps the index down so each note
+# starts bright and mellows; a second env shapes the level. melo plays A3, C4,
+# E4, A4. Nothing is NaN or over 0 dBFS and the notes land on the grid.
+# scn: length 8b, seed 0, assets click
+# expect: peak <= 0dbfs
+# expect: peak >= -14dbfs
+# expect: onsets on main every 1b within 64f in 0b..0.02b
+# expect: onsets on main every 1b within 64f in 0.90b..1.02b
+# expect: onsets on main every 1b within 64f in 1.90b..2.02b
+# expect: onsets on main every 1b within 64f in 2.90b..3.02b
+# expect: onsets on main every 1b within 64f in 3.90b..4.02b
+# expect: onsets on main every 1b within 64f in 4.90b..5.02b
+# expect: onsets on main every 1b within 64f in 5.90b..6.02b
+# expect: equals golden
+voice ep gain=0.5 {
+  wave a ratio=1 out=no
+  wave b ratio=14 out=no gain=0.3
+  wave c fm=a+b index=0.5 fb=0.4
+  env bright to=c.index depth=3 attack=0 decay=300ms sustain=0
+  env amp to=c.gain attack=2ms decay=800ms sustain=0
+  seq notes 1 2 3 4 in 4 | melo ep 57 60 64 69
+}
+start ep
+end after 7

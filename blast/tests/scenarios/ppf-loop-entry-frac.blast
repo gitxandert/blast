@@ -1,0 +1,6 @@
+# Entering a ping-pong loop at rate 0.55 on off-zero loop points (fractional reads, so Hermite `tap`
+# runs) must not click (REQ-133).
+# scn: length 2b, seed 0, assets sine440
+# expect: no clicks
+voice pp from "sine440" rate=0.55 loop=pingpong loopstart=0.1013 loopend=0.2031
+start pp

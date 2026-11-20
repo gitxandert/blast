@@ -1,0 +1,16 @@
+[Unit]
+Description=blast server: the BLAST REPL in the browser
+# needs the user's sound server for local output and PipeWire routing
+After=pipewire.service wireplumber.service
+Wants=pipewire.service
+
+[Service]
+# Edit the path to where blast-server was built. No --bg: systemd
+# supervises it.
+ExecStart=/data/rust_proj/blast/target/release/blast-server
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

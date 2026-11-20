@@ -1,0 +1,21 @@
+# HPR: playback at speed through the Elliptic-BLEP resampler. A drum loop (the
+# bursts) and a pad (a looped sine) glide from 1x to 3x over six beats, each
+# running through `resample=iir` (the default); a second pad does the same
+# through `cubic`, hard-panned right, to show both methods pass the same
+# checks. The pad's loop is whole cycles, so the wrap is seamless; the iir
+# voices are band-limited through the glide: no clicks, level held.
+# scn: length 8b, seed 0, assets burst sine440
+# expect: peak <= 0dbfs
+# expect: peak >= -12dbfs
+# expect: rms 0b..1b >= -30dbfs
+# expect: rms 3b..4b >= -30dbfs
+# expect: rms 6b..7b >= -30dbfs
+# expect: no clicks
+# expect: equals golden
+voice drums from "burst" loop=forward gain=0.15
+voice pad from "sine440" loop=forward pan=-1 gain=0.4
+voice padc from "sine440" loop=forward pan=1 gain=0.4 resample=cubic
+start drums pad padc
+drums rate=3 over 6
+pad rate=3 over 6
+padc rate=3 over 6

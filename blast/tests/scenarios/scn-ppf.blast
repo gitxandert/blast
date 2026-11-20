@@ -1,0 +1,8 @@
+# The same ping-pong loop with the default turnaround fade: no clicks, and
+# the loop keeps sounding. Loop points are zero crossings of the
+# sine.
+# scn: length 2b, seed 0, assets sine440
+# expect: no clicks
+# expect: rms 0b..2b >= -12dbfs
+voice pp from "sine440" loop=pingpong loopstart=0.1 loopend=0.2
+start pp

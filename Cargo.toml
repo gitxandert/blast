@@ -1,5 +1,11 @@
 [workspace]
+resolver = "3"
 members = [
   "blast",
   "blast_macros",
+  "blast_server",
 ]
+
+# No debug info for dependencies: keeps target/ small; own crates keep full debug info.
+[profile.dev.package."*"]
+debug = false

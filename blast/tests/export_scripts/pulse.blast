@@ -1,0 +1,9 @@
+# a random pulse that pans over two beats, then stops on a wait
+voice kick from "kick"
+kick { seq s steps=8 grid=16 chance=60 jitter=0.1 in 4 | trig }
+start kick
+wait 2
+kick pan=-1 over 2b
+wait 2
+kick gain=0.5 over 1b then stop kick
+wait 1

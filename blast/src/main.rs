@@ -1,131 +1,54 @@
-use std::fs;
-use std::collections::{HashMap, hash_map::Entry};
+#![forbid(unsafe_code)]
 use blast::{
-    file_parsing::{
-        mpeg, aiff, wav,
-        decode_helpers::{
-            DecodeError, DecodeResult, AudioFile
-        },
-    },
     audio_processing::runtime::run_blast,
+    cli::{CliErr, USAGE, parse_args},
 };
+use std::process::ExitCode;
 
-fn main() -> DecodeResult<()> {
-    let mut tracks = HashMap::<String, AudioFile>::new();
-    let mut sample_rates = HashMap::<u32, u32>::new();
-    let mut channel_nums = Vec::<u32>::new();
+fn main() -> ExitCode {
+    if std::env::args_os().nth(1).is_some_and(|a| a == "server") {
+        return server();
+    }
+    let options = match parse_args(std::env::args_os().skip(1)) {
+        Ok(options) => options,
+        Err(CliErr::Help) => {
+            println!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
+        Err(error) => {
+            eprintln!("Error: {error}\n\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
 
-    for entry in fs::read_dir("blast/assets/")? {
-        let dir = match entry {
-            Ok(pathbuf) => pathbuf,
-            Err(error) => {
-                println!("Error: {error}");
-                continue;
-            }
-        };
-
-        let pathbuf = dir.path();
-
-        let path = match pathbuf.to_str() {
-            Some(valid) => valid,
-            None => {
-                println!("Error: invalid unicode in '{:?}'", dir.path());
-                continue;
-            }
-        };
-
-
-        let ext: &str = match path.rsplit_once(|b: char| b == '.') {
-            Some((before, after)) if !before.is_empty() && !after.is_empty() => after,
-            _ => "",
-        };
-
-        let track: AudioFile = match ext {
-            /* TODO: figure out actual mpeg decoding...
-            "mp3" => {
-                match mpeg::parse(path) {
-                    Ok(file) => file,
-                    Err(error) => {
-                        println!("{:?}", error);
-                        continue;
-                    }
-                }
-            }
-            */
-            "wav" => {
-                match wav::parse(path) {
-                    Ok(file) => file,
-                    Err(error) => {
-                        println!("{:?}", error);
-                        continue;
-                    }
-                }
-            }
-            "aif" => {
-                match aiff::parse(path) {
-                    Ok(file) => file,
-                    Err(error) => {
-                        println!("{:?}", error);
-                        continue;
-                    }
-                }
-            }
-            _ => {
-                println!("Error: unsupported format for '{}'", path);
-                continue;
-            }
-        };
-
-        *sample_rates.entry(track.sample_rate).or_insert(0) += 1;
-        channel_nums.push(track.num_channels);
-        
-        match tracks.entry(track.file_name.clone()) {
-            Entry::Vacant(e) => { e.insert(track);}
-            Entry::Occupied(_) => {
-                println!("Error: multiple files with the same name {}", track.file_name);
-                continue;
-            }
+    match run_blast(&options) {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            ExitCode::FAILURE
         }
     }
+}
 
-    let mutual_rate: u32 = {
-        let mut rates: Vec<(&u32, &u32)> = sample_rates.iter().collect();
-        rates.sort_by(|(_, v1), (_, v2)| v2.cmp(v1));
-        let (key, val) = match rates.get(0) {
-            Some((k, v)) => (**k, **v),
-            None => {
-                println!("Error: problem with deciding sample rate");
-                (44100, 0)
-            }
-        };
-       
-        println!("Mutual sample_rate: {key}");
-
-        key
-    };
-
-    let num_channels: u32 = {
-        channel_nums.sort_by(|v1, v2| v2.cmp(v1));
-        let val = match channel_nums.get(0) {
-            Some(v) => *v,
-            None => {
-                println!("Error: problem with deciding num channels");
-                2
-            }
-        };
-
-        println!("Num channels: {val}");
-
-        val
-    };
-
-    println!("Loaded tracks [");
-    for (track, _) in &tracks {
-        println!("\t{}", track);
-    }
-    println!("]");
-
-    run_blast(tracks, mutual_rate, num_channels);
-
-    Ok(())
+/// `blast server ARGS`: runs `blast-server ARGS`, the web UI's server. It is
+/// its own binary (the `blast_server` crate) so the web stack stays out of
+/// blast's build; it is looked for next to this binary, then on `PATH`.
+fn server() -> ExitCode {
+    use std::os::unix::process::CommandExt;
+    let sibling = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join("blast-server")))
+        .filter(|p| p.is_file());
+    let program = sibling.unwrap_or_else(|| "blast-server".into());
+    // only returns if the exec failed
+    let error = std::process::Command::new(&program)
+        .args(std::env::args_os().skip(2))
+        .exec();
+    eprintln!(
+        "Error: could not run {}: {error}\n\
+         `blast server` needs the blast-server binary: build it with\n\
+         `cargo build --release -p blast_server` (or a workspace `cargo build --release`)",
+        program.display()
+    );
+    ExitCode::FAILURE
 }

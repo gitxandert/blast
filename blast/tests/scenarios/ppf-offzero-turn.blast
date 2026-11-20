@@ -1,0 +1,6 @@
+# With the default 2 ms bounce and loop points that are not zero crossings,
+# the turnaround must not click (REQ-133).
+# scn: length 2b, seed 0, assets sine440
+# expect: no clicks
+voice pp from "sine440" start=0.1013 loop=pingpong loopstart=0.1013 loopend=0.2031
+start pp

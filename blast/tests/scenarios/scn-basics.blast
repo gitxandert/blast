@@ -1,0 +1,15 @@
+# A seq on the beat: levels, onsets on the clock grid, no clicks, and silence
+# after the script's `end`.
+# scn: length 8b, seed 0, assets burst
+# expect: peak <= -1dbfs
+# expect: peak >= -3dbfs
+# expect: rms 0b..4b >= -35dbfs
+# expect: rms 0b..4b <= -20dbfs
+# expect: onsets on main every 1b within 64f in 0b..6b
+# expect: onsets at 0b 1b 2b 3b 4b 5b within 64f
+# expect: no clicks
+# expect: silent after 7b
+voice kick from "burst" end=0.06
+kick { seq s 1 2 3 4 in 4 | trig }
+start kick
+end after 6

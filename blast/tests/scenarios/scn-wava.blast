@@ -1,0 +1,58 @@
+# WAVa: a quiet organ of three sines (REQ-056 piece 8), a saw bass that melo
+# plays (a note a beat: A2, C3, E3, A3) through a low-pass, and a noise hat
+# shaped by an env on the off-beats. The wave restarts its phase on every
+# note (retrig=yes) from silence (the env's attack), so a note start is no
+# click (the low-pass takes the saw's own steps out of the detector's sight);
+# the notes land on the grid (the onset check looks at the first 20 ms of
+# each: a 110 Hz saw swings too slowly for a 2 ms detector later on) and sit
+# within 5 cents of their pitch.
+# scn: length 8b, seed 0, assets click
+# expect: peak <= 0dbfs
+# expect: peak >= -12dbfs
+# expect: onsets on main every 1b within 64f in 0b..0.02b
+# expect: onsets on main every 1b within 64f in 0.90b..1.02b
+# expect: onsets on main every 1b within 64f in 1.90b..2.02b
+# expect: onsets on main every 1b within 64f in 2.90b..3.02b
+# expect: onsets on main every 1b within 64f in 3.90b..4.02b
+# expect: onsets on main every 1b within 64f in 4.90b..5.02b
+# expect: onsets on main every 1b within 64f in 5.90b..6.02b
+# expect: onsets on main every 1b within 64f in 6.90b..7.02b
+# expect: onsets on main every 0.5b within 64f in 0.49b..0.55b
+# expect: onsets on main every 0.5b within 64f in 1.49b..1.55b
+# expect: onsets on main every 0.5b within 64f in 2.49b..2.55b
+# expect: onsets on main every 0.5b within 64f in 3.49b..3.55b
+# expect: onsets on main every 0.5b within 64f in 4.49b..4.55b
+# expect: onsets on main every 0.5b within 64f in 5.49b..5.55b
+# expect: onsets on main every 0.5b within 64f in 6.49b..6.55b
+# expect: onsets on main every 0.5b within 64f in 7.49b..7.55b
+# expect: rms 0.5b..0.52b >= -35dbfs
+# expect: rms 1.5b..1.52b >= -35dbfs
+# expect: rms 0.9b..0.99b <= -35dbfs
+# expect: rms 0b..0.1b >= -25dbfs
+# expect: no clicks
+# expect: pitch 0.05b..0.3b 110hz within 5c
+# expect: pitch 1.05b..1.3b 130.81hz within 5c
+# expect: pitch 2.05b..2.3b 164.81hz within 5c
+# expect: pitch 3.05b..3.3b 220hz within 5c
+# expect: pitch 4.05b..4.3b 110hz within 5c
+# expect: equals golden
+voice organ {
+  wave s1 shape=sine freq=220 gain=0.008
+  wave s2 shape=sine freq=440 gain=0.008
+  wave s3 shape=sine freq=880 gain=0.008
+}
+voice bass gain=0.5 {
+  wave saw1 shape=saw freq=a2
+  filter lo type=lp cutoff=350
+  env amp attack=2ms decay=450ms sustain=0
+  seq notes 1 2 3 4 in 4 | melo bass 60 63 67 72
+}
+voice hat gain=0.2 {
+  wave n shape=noise
+  env tick attack=0 decay=30ms sustain=0
+  seq off 1.5 2.5 3.5 4.5 in 4 | trig
+}
+start organ bass hat
+wait 6
+organ.s2 freq=660 over 1
+end after 7

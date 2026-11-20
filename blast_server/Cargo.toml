@@ -1,0 +1,26 @@
+[package]
+name = "blast_server"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "blast server: the BLAST REPL in a browser, hosting a BLAST engine and streaming its output"
+
+# `blast server ARGS` execs this binary (it sits next to `blast`), so blast's
+# own build and tests don't compile the web stack.
+[[bin]]
+name = "blast-server"
+path = "src/main.rs"
+
+# New crates approved by the user for the server only (plans/README.md §1.1).
+[dependencies]
+blast = { path = "../blast" }
+# must match blast's: its open_device/choose_config hand us cpal types
+cpal = "0.18.2"
+rtrb = "0.4.0"
+lexopt = "0.3.2"
+axum = { version = "0.8", default-features = false, features = ["ws", "http1", "tokio", "query", "json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal", "fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

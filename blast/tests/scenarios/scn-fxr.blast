@@ -1,0 +1,27 @@
+# Filter, drive and crush on a voice and on a group, with glides and an lfo on
+# lo.cutoff. FXR moves the effects into a registry without changing a sample:
+# `equals golden` was blessed on the base before the engine changed.
+# scn: length 8b, seed 0, assets burst
+# expect: peak <= 0dbfs
+# expect: rms 0b..4b >= -50dbfs
+# expect: equals golden
+voice kick from "burst" end=0.5
+voice hat from "burst" end=0.1
+kick { seq s 1 2 3 4 in 4 | trig }
+hat { seq h 1 2 in 2 | trig }
+kick { filter lo type=lp cutoff=800 q=2 }
+kick { drive dirt amount=24 mix=0.5 }
+kick { crush bit bits=6 down=4 mix=0.7 }
+group drums { kick; hat }
+drums { filter dark cutoff=1200 base=-12db }
+drums { drive warm amount=6 gain=-3db }
+drums { crush grit bits=10 }
+kick { lfo sweep to=lo.cutoff depth=2 freq=4b }
+start drums
+wait 1
+kick.lo cutoff=4000 q=4 over 2
+kick.bit bits=4 mix=1 over 1
+drums.dark cutoff=300 over 3
+drums.dark type=hp
+kick.lo type=bp
+end after 7

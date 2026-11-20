@@ -1,0 +1,45 @@
+# WAVb: wavetables. Three parts, four beats each (a beat is 0.5 s):
+#  0b..4b  a table of eight different noise cycles, swept from the first to
+#          the last by `pos` (a glide): audible and in range;
+#  4b..8b  the 440 Hz sine asset cut into 220 slices (two cycles each, so
+#          the table is a clean sine), read at 220 Hz: a 440 Hz tone, within
+#          5 cents, that glides up an octave in the last beat;
+#  8b..12b the same table glided from 750 to 800 Hz (a 1.5 to 1.6 kHz tone) through three
+#          steep high-passes at 13 kHz. Nothing of the table is up there
+#          (its partials stop under 12 kHz at these pitches), so what is left
+#          is what the reading made up: images and aliases. They are held
+#          under -80 dBFS, 74 dB under the sine (-6 dBFS; measured -93.8 dBFS),
+#          well past the -60 dB the plan asks of the top octave.
+# scn: length 12b, seed 0, assets noise sine440
+# expect: peak <= 0dbfs
+# expect: rms 0.5b..3.5b >= -36dbfs
+# expect: peak 0.5b..4b <= -15dbfs
+# expect: pitch 4.5b..6.5b 440hz within 5c
+# expect: rms 4.5b..6.5b >= -12dbfs
+# expect: rms 8.5b..11.5b <= -80dbfs
+# expect: equals golden
+voice sweep gain=0.5 {
+  wave t shape=table from="noise" slices=8 freq=220 pos=0
+}
+voice tone {
+  wave t shape=table from="sine440" slices=220 freq=220
+}
+voice air {
+  wave t shape=table from="sine440" slices=220 freq=750
+  filter h1 type=hp cutoff=13000
+  filter h2 type=hp cutoff=13000
+  filter h3 type=hp cutoff=13000
+}
+start sweep
+sweep.t pos=1 over 4b
+wait 4b
+stop sweep
+start tone
+wait 2b
+tone.t freq=440 over 2b
+wait 2b
+stop tone
+start air
+air.t freq=800 over 4b
+wait 4b
+end after 12b

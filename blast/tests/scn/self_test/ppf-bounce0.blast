@@ -1,0 +1,6 @@
+# The ping-pong turnaround with the fade off must click: this file's
+# `no clicks` has to fail (run by tests/scenarios.rs, not by discovery).
+# scn: length 2b, seed 0, assets sine440
+# expect: no clicks
+voice pp from "sine440" start=0.1 loop=pingpong loopstart=0.1 loopend=0.2 bounce=0
+start pp

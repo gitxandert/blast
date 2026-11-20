@@ -1,0 +1,15 @@
+# Hits on pitch-shifted voices (REQ-102/103) do not click, on the grains
+# and on the spectral shifter. The scenario is a script, and since SHFIX a
+# script's spectral voice gets its shifters like a typed one does (REQ-134),
+# so `sp` plays through the shifter. The burst decays to silence before each
+# cut and before the next hit.
+# scn: length 8b, seed 0, assets burst
+# expect: no clicks
+# expect: peak <= 0dbfs
+# expect: rms 0b..8b >= -45dbfs
+voice g from "burst" end=0.06 pitch=5st shift=grains
+g { seq s 1 2 3 4 in 4 | trig }
+start g
+voice sp from "burst" end=0.06 pitch=-7st shift=spectral window=60ms
+sp { seq s 1.5 2.5 3.5 4.5 in 4 | trig }
+start sp

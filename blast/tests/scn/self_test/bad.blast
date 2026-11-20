@@ -1,0 +1,15 @@
+# Every expectation here is wrong for the render and must fail.
+# scn: length 2b, seed 0, assets click sine440
+# expect: peak >= 6dbfs
+# expect: peak 0b..0.2b <= -30dbfs
+# expect: rms 0b..2b <= -60dbfs
+# expect: onsets on main every 0.25b within 10f
+# expect: onsets at 0.5b 1.5b within 10f
+# expect: pitch 0b..1b 880hz within 5c
+# expect: silent after 0b
+# expect: equals ppf-bounce0 within -120dbfs
+voice s from "sine440" gain=0.5
+voice k from "click"
+seq hit 1 in 4 | trig k
+start s
+start k

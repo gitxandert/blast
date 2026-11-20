@@ -1,0 +1,25 @@
+# Three spectral voices at different pitches hit on one frame (REQ-134): the
+# cold-seek budget serves one and refuses the others, which play on the
+# grains. The counters aren't visible from here; the unit test
+# `same_frame_hits_are_refused` (engine/voice/tests.rs) pins that two of the
+# three hits are refused. This scenario checks what is heard: the rms floor
+# (-32 dBFS; all three voices measure about -30, one alone about -35) shows
+# all three sound each beat, the peak stays under 0 dBFS, and `no clicks`
+# holds because the burst decays to silence before each note's hard cut
+# (REQ-074). The seq loops, so the second pass (4b..8b) is checked too.
+# scn: length 8b, seed 0, assets burst
+# expect: no clicks
+# expect: peak <= 0dbfs
+# expect: rms 0b..1b >= -32dbfs
+# expect: rms 1b..2b >= -32dbfs
+# expect: rms 2b..3b >= -32dbfs
+# expect: rms 3b..4b >= -32dbfs
+# expect: rms 4b..8b >= -32dbfs
+voice a from "burst" end=0.06 pitch=3st gain=0.4 shift=spectral window=60ms
+voice b from "burst" end=0.06 pitch=7st gain=0.4 shift=spectral window=60ms
+voice c from "burst" end=0.06 pitch=-5st gain=0.4 shift=spectral window=60ms
+seq hits 1 2 3 4 in 4 | trig a, trig b, trig c
+start a
+start b
+start c
+start hits

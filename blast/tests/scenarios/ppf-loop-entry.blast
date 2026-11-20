@@ -1,0 +1,6 @@
+# Entering a ping-pong loop from before loopstart (default bounce) must not
+# click: the fade mirrors across the loop start (REQ-133).
+# scn: length 2b, seed 0, assets sine440
+# expect: no clicks
+voice pp from "sine440" loop=pingpong loopstart=0.1 loopend=0.2
+start pp

@@ -1,0 +1,11 @@
+# two voices and an lfo; the written end stops them after a glide
+voice a from "kick"
+voice b from "kick"
+a { seq p steps=4 grid=16 jitter=0.05 in 2 | trig }
+b { seq q steps=5 grid=16 chance=70 in 4 | trig }
+a { lfo w depth=0.5 to=pan freq=0.5 }
+start a
+start b
+wait 1
+b gain=0 over 3b
+end after 3

@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#0e1013">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>blast</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header id="bar">
+      <button id="conn" class="dot" title="connection" aria-label="connection status"></button>
+      <span class="brand">blast</span>
+      <button id="out-btn" class="chip" title="output device">…</button>
+      <span id="stat" class="muted small"></span>
+      <span class="grow"></span>
+      <button id="listen" class="btn" aria-pressed="false" title="hear the engine on this device">
+        <span class="ico">🎧</span><span class="lbl">Listen</span>
+      </button>
+      <button id="menu" class="btn icon" title="panels" aria-label="open panels">☰</button>
+    </header>
+
+    <main id="transcript" aria-live="polite"></main>
+
+    <div id="dock">
+      <div id="chips" class="chips" hidden></div>
+      <div id="keys" class="keys"></div>
+      <form id="prompt" autocomplete="off">
+        <span id="marker" class="marker">^</span>
+        <textarea id="input" rows="1" spellcheck="false" autocapitalize="off"
+                  autocorrect="off" autocomplete="off" enterkeyhint="send"
+                  aria-label="blast prompt" placeholder="voice kick from &quot;kick&quot;"></textarea>
+        <button id="send" class="btn send" type="submit" aria-label="run">⏎</button>
+      </form>
+    </div>
+
+    <section id="sheet" hidden>
+      <nav id="tabs">
+        <div class="tabs-scroll">
+          <button data-tab="audio" class="tab">Audio</button>
+          <button data-tab="sources" class="tab">Sources</button>
+          <button data-tab="assets" class="tab">Assets</button>
+          <button data-tab="history" class="tab">History</button>
+          <button data-tab="help" class="tab">Help</button>
+          <button data-tab="settings" class="tab" aria-label="Settings">⚙</button>
+        </div>
+        <button id="sheet-close" class="btn icon" aria-label="close">✕</button>
+      </nav>
+
+      <div class="panel" data-panel="audio">
+        <h3>Listening here</h3>
+        <div class="row">
+          <button id="listen2" class="btn">Start listening</button>
+          <span id="listen-stats" class="muted small"></span>
+        </div>
+        <label class="row">Volume <input id="vol" type="range" min="0" max="1" step="0.01"></label>
+        <label class="row">Buffer <input id="jit" type="range" min="20" max="1000" step="10"> <span id="jit-v" class="small"></span></label>
+        <p class="muted small">A bigger buffer survives a weaker connection; a smaller one is closer to real time.</p>
+
+        <h3>Engine output</h3>
+        <div id="out-current" class="card"></div>
+        <div class="row">
+          <label class="small"><input id="dev-all" type="checkbox"> show every ALSA device</label>
+          <span class="grow"></span>
+          <button id="dev-refresh" class="btn small">Refresh</button>
+        </div>
+        <ul id="devices" class="list"></ul>
+
+        <div id="pw-wrap" hidden>
+          <h3>PipeWire sinks</h3>
+          <p class="muted small">Moves just blast's stream (when the output above is default, pipewire or pulse). Plug in a USB interface and it shows up here.</p>
+          <ul id="pw-sinks" class="list"></ul>
+          <p id="pw-note" class="muted small"></p>
+        </div>
+
+        <h3>Engine</h3>
+        <div class="row wrap">
+          <button id="restart-keep" class="btn">Restart, keep session</button>
+          <button id="restart-fresh" class="btn danger">Restart fresh</button>
+        </div>
+        <div id="engine-info" class="muted small mono"></div>
+      </div>
+
+      <div class="panel" data-panel="sources">
+        <div class="row wrap">
+          <button id="src-new" class="btn">New</button>
+          <label class="btn">Upload .blast<input id="src-upload" type="file" accept=".blast,text/plain" multiple hidden></label>
+          <button id="src-state" class="btn">Save session as…</button>
+          <span class="grow"></span>
+          <button id="src-refresh" class="btn small">Refresh</button>
+        </div>
+        <ul id="sources" class="list"></ul>
+        <div id="editor" hidden>
+          <div class="row">
+            <input id="ed-name" class="mono grow" placeholder="name" spellcheck="false" autocapitalize="off">
+          </div>
+          <textarea id="ed-text" class="mono" spellcheck="false" autocapitalize="off" autocorrect="off"></textarea>
+          <div class="row wrap">
+            <button id="ed-save" class="btn">Save</button>
+            <button id="ed-check" class="btn">Check</button>
+            <button id="ed-run" class="btn primary">Save &amp; run</button>
+            <button id="ed-hist" class="btn" title="source NAME history">To history</button>
+            <button id="ed-sel" class="btn" title="run the selected lines (or the line under the cursor) at the prompt">Run lines</button>
+            <span class="grow"></span>
+            <button id="ed-close" class="btn small">Close</button>
+          </div>
+          <pre id="ed-msg" class="small"></pre>
+        </div>
+      </div>
+
+      <div class="panel" data-panel="assets">
+        <div class="row wrap">
+          <label class="btn">Upload audio<input id="as-upload" type="file" accept="audio/*,.wav,.aif,.aiff,.aifc,.flac,.mp3,.m4a,.aac,.au,.snd,.raw,.pcm" multiple hidden></label>
+          <input id="as-folder" class="mono" placeholder="into folder (optional)" spellcheck="false" autocapitalize="off">
+          <button id="as-rescan" class="btn">rescan</button>
+          <span class="grow"></span>
+          <button id="as-refresh" class="btn small">Refresh</button>
+        </div>
+        <input id="as-filter" class="mono" placeholder="filter" spellcheck="false" autocapitalize="off">
+        <div id="as-progress" class="muted small"></div>
+        <ul id="assets" class="list"></ul>
+        <audio id="preview" preload="none" playsinline></audio>
+      </div>
+
+      <div class="panel" data-panel="history">
+        <input id="hist-filter" class="mono" placeholder="search history (Ctrl-R)" spellcheck="false" autocapitalize="off">
+        <ul id="history" class="list"></ul>
+      </div>
+
+      <div class="panel" data-panel="help">
+        <div class="row wrap" id="help-buttons"></div>
+        <pre id="card" class="mono small"></pre>
+      </div>
+
+      <div class="panel" data-panel="settings">
+        <div id="who" class="muted small"></div>
+        <label class="row">Theme
+          <select id="p-theme"><option>auto</option><option>dark</option><option>light</option></select>
+        </label>
+        <label class="row">Font size <input id="p-font" type="number" min="9" max="32"></label>
+        <label class="row"><input id="p-live" type="checkbox"> completions while typing</label>
+        <label class="row"><input id="p-marker" type="checkbox"> animated prompt marker</label>
+        <label class="row"><input id="p-auto" type="checkbox"> start listening on first tap</label>
+        <label class="row"><input id="p-rescan" type="checkbox"> rescan after uploading audio</label>
+        <label class="col">Symbol keys (space separated)
+          <input id="p-keys" class="mono" spellcheck="false" autocapitalize="off">
+        </label>
+        <div class="row">
+          <button id="p-save" class="btn primary">Save</button>
+          <button id="p-reset" class="btn">Reset to defaults</button>
+        </div>
+        <p class="muted small">Saved per user on the server. Defaults and per-user overrides live in the config file.</p>
+      </div>
+    </section>
+  </div>
+  <div id="toast" hidden></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
